@@ -1,0 +1,41 @@
+{
+  "_comment": "MNN B-Roll Search Engine settings. Copy this file to config.json and edit. Paths may use forward slashes (Z:/B-Roll Footage) or escaped backslashes (Z:\\\\B-Roll Footage). UNC paths like //server/share/B-Roll also work.",
+
+  "footage_paths": [
+    "Z:/B-Roll Footage"
+  ],
+
+  "database_path": "broll_index.db",
+
+  "video_extensions": [
+    ".mp4",
+    ".mxf",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".m4v",
+    ".wmv"
+  ],
+
+  "auto_index": {
+    "_comment": "Re-index automatically once per day. run_on_launch indexes when the app opens if more than interval_hours has passed since the last run.",
+    "enabled": true,
+    "run_on_launch": true,
+    "interval_hours": 24
+  },
+
+  "extract_video_metadata": true,
+  "ffprobe_path": "ffprobe",
+  "ffmpeg_path": "ffmpeg",
+
+  "_web_comment": "Settings for the browsable gallery (default UI). web_port is the localhost port; preview_max_width/seconds control the size/length of generated hover-preview clips.",
+  "web_port": 8765,
+  "preview_max_width": 640,
+  "preview_max_seconds": 60,
+
+  "validation": {
+    "_comment": "Tuning for the Phase 1 mapped-drive connection check. listing_timeout_seconds guards against a hung/slow network drive; warn_if_empty flags a reachable folder that contains no footage (often a sign SharePoint sync is behind).",
+    "listing_timeout_seconds": 10,
+    "warn_if_empty": true
+  }
+}

@@ -1,0 +1,16 @@
+# MNN B-Roll Footage Search Engine — Python dependencies
+#
+# Phase 1 (config + drive validation) uses only the Python standard library,
+# so the app can validate the SharePoint mapped drive with no installs.
+#
+# The browsable footage gallery (default UI) runs on a local Flask server:
+Flask>=2.3,<4
+
+# Optional simple desktop UI (python main.py --desktop) uses PyQt5:
+PyQt5>=5.15,<6
+
+# Note: ffmpeg / ffprobe (video thumbnails, previews, and duration/resolution)
+# are EXTERNAL tools, not pip packages. Drop ffmpeg.exe + ffprobe.exe into the
+# tools\ folder (see tools\README.txt) — the app auto-detects them. Everything
+# works without them; you just won't get thumbnails/previews. SQLite ships with
+# Python.

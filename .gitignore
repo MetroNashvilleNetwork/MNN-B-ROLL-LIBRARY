@@ -1,0 +1,24 @@
+# Local user settings (contains machine-specific mapped-drive paths)
+config.json
+
+# Local SQLite index and any WAL/SHM sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# Generated thumbnails / preview clips (regenerated from the footage)
+cache/
+
+# Claude Code local config (not part of the app)
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Bundled tools (if you drop ffprobe.exe into the project)
+ffprobe.exe
+ffmpeg.exe

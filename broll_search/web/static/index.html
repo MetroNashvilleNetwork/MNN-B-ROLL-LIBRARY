@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MNN B-Roll Library</title>
+  <link rel="icon" type="image/svg+xml" href="/static/logo.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Sticky toolbar -->
+  <div id="toolbar" class="toolbar">
+    <a class="tb-brand" data-home href="#top">
+      <img src="/static/logo.svg" alt="MNN" />
+      <span>B-Roll Library</span>
+    </a>
+    <div class="tb-search">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              d="M21 21l-4.3-4.3M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg>
+      <input id="miniSearch" type="search" placeholder="Search footage…" autocomplete="off" />
+    </div>
+    <div class="tb-actions">
+      <select id="sort" title="Sort results">
+        <option value="relevance">Best match</option>
+        <option value="modified">Newest</option>
+        <option value="filename">Name (A–Z)</option>
+        <option value="size">Largest</option>
+      </select>
+      <button id="collectionBtn" class="ghost" title="Your project collection">
+        ★ Collection <span id="collCount" class="badge-count">0</span>
+      </button>
+      <button id="reindexBtn" class="ghost" title="Re-scan the footage drive"><span class="ic">↻</span> Re-index</button>
+    </div>
+  </div>
+
+  <!-- Hero -->
+  <header id="top" class="hero">
+    <video id="heroV1" class="hero-bg" muted playsinline preload="none"></video>
+    <video id="heroV2" class="hero-bg" muted playsinline preload="none"></video>
+    <div class="hero-scrim"></div>
+    <div class="hero-content">
+      <a class="hero-brand" data-home href="#top">
+        <img src="/static/logo.svg" alt="MNN" class="hero-logo" />
+        <div class="hero-brand-text">
+          <span class="hero-kicker">Metro Nashville Network</span>
+          <h1 class="hero-title">B-Roll Library</h1>
+        </div>
+      </a>
+      <p class="hero-tag">Browse, preview, and grab the footage you need — your entire b-roll archive, searchable.</p>
+      <div class="hero-searchwrap">
+        <svg class="hero-search-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                d="M21 21l-4.3-4.3M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg>
+        <input id="search" type="search" autocomplete="off"
+               placeholder="Search “cherry blossoms”, “water treatment”, “courtroom”…" />
+      </div>
+      <div class="hero-suggest">
+        <span class="hero-suggest-label">Try:</span>
+        <button class="suggest" data-q="cherry blossoms">cherry blossoms</button>
+        <button class="suggest" data-q="meeting">meetings</button>
+        <button class="suggest" data-q="water treatment">water treatment</button>
+        <button class="suggest" data-q="closeup">closeups</button>
+      </div>
+      <div id="heroStat" class="hero-stat"></div>
+    </div>
+  </header>
+
+  <!-- HOME: category rows -->
+  <main id="home" class="home">
+    <div id="rows" class="rows"></div>
+  </main>
+
+  <!-- BROWSE: filter bar + justified grid -->
+  <section id="browse" class="browse hidden">
+    <nav id="filterbar" class="filterbar">
+      <button id="backHome" class="ghost sm">← Home</button>
+      <div class="fb-group"><span class="fb-label">Shooter</span><div id="f-shooter" class="chips"></div></div>
+      <div class="fb-group"><span class="fb-label">Shot</span><div id="f-shot" class="chips"></div></div>
+      <div class="fb-group"><span class="fb-label">Type</span><div id="f-ext" class="chips"></div></div>
+      <div class="fb-group">
+        <span class="fb-label">Month</span>
+        <select id="f-from"><option value="">Any</option></select>
+        <span class="arrow">→</span>
+        <select id="f-to"><option value="">Any</option></select>
+      </div>
+      <button id="clearBtn" class="ghost sm">Clear</button>
+      <span id="ffmpegNote" class="fb-note hidden" title="Add ffmpeg+ffprobe to tools\ for previews">previews off</span>
+    </nav>
+    <div class="results">
+      <div class="results-head">
+        <h2 id="browseTitle" class="browse-title"></h2>
+        <span id="count" class="count"></span>
+        <span id="activeFilters" class="active-filters"></span>
+      </div>
+      <div id="grid" class="grid"></div>
+      <div id="loader" class="loader hidden"><span class="spinner"></span></div>
+      <div id="sentinel"></div>
+      <div id="empty" class="empty hidden">
+        <div class="empty-art">🎬</div>
+        <p class="empty-title">No footage matches your search</p>
+        <p class="muted">Try fewer words, or clear the filters.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Collection drawer -->
+  <div id="drawer" class="drawer hidden">
+    <div class="drawer-backdrop" data-drawer-close></div>
+    <div class="drawer-panel">
+      <div class="drawer-head">
+        <h3>★ Project Collection <span id="drawerCount" class="muted"></span></h3>
+        <button class="modal-close" data-drawer-close title="Close">✕</button>
+      </div>
+      <div class="drawer-actions">
+        <button id="copyAllBtn" class="primary sm">⧉ Copy all file paths</button>
+        <button id="clearCollBtn" class="ghost sm">Clear</button>
+      </div>
+      <div id="drawerItems" class="drawer-items"></div>
+      <div id="drawerEmpty" class="drawer-empty muted">
+        Nothing here yet. Click the ★ on any clip to add it to your collection for a project.
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <button class="modal-close" data-close title="Close">✕</button>
+      <div class="modal-video">
+        <video id="modalVideo" controls preload="metadata" playsinline></video>
+        <div id="modalNoPreview" class="no-preview hidden">
+          <p>No preview available for this file type.</p>
+          <p class="muted">Use “Open file location” to view it in your editor.</p>
+        </div>
+      </div>
+      <div class="modal-info">
+        <h2 id="modalTitle"></h2>
+        <dl id="modalMeta"></dl>
+        <div class="modal-actions">
+          <button id="collectBtn" class="ghost">★ Add to collection</button>
+          <button id="revealBtn" class="primary">📁 Open file location</button>
+          <button id="copyBtn" class="ghost">⧉ Copy file path</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
