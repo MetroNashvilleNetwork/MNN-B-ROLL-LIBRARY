@@ -46,7 +46,7 @@ body::after {
 .hidden { display:none !important; }
 .muted { color:var(--muted); }
 code { background:var(--elev-2); padding:1px 5px; border-radius:4px; font-size:12px; }
-/* Creative display headings (Bricolage Grotesque) */
+/* Serif display headings (Fraunces) */
 .hero-title { font-family:var(--display); font-weight:800; letter-spacing:-.02em; }
 .row-title,.browse-title,.modal-info h2,.drawer-head h3 {
   font-family:var(--display); font-weight:700; letter-spacing:-.01em; }
