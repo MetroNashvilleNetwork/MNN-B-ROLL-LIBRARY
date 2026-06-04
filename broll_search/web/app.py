@@ -39,6 +39,9 @@ def _network_path(path: str) -> str:
 
 def _row_to_dict(r) -> dict:
     network_path = _network_path(r["path"])
+    keys = r.keys()
+    ai_desc = r["ai_description"] if "ai_description" in keys else None
+    ai_tags = r["ai_tags"] if "ai_tags" in keys else None
     return {
         "id": r["id"],
         "filename": r["filename"],
@@ -56,6 +59,8 @@ def _row_to_dict(r) -> dict:
         "path": r["path"],
         "network_path": network_path,
         "network_folder": os.path.dirname(network_path),
+        "description": ai_desc or "",
+        "tags": [t.strip() for t in (ai_tags or "").split(",") if t.strip()],
     }
 
 
@@ -66,6 +71,14 @@ class _IndexState:
         self.running = False
         self.message = ""
         self.lock = threading.Lock()
+
+
+def _categorized_ids(con) -> set:
+    """Set of file ids that match at least one subject category."""
+    expr = cats.all_categories_fts()
+    if not expr:
+        return set()
+    return {r["id"] for r in db.search(con, fts_expr=expr, limit=100000)}
 
 
 def create_app(config: Config) -> Flask:
@@ -136,6 +149,15 @@ def create_app(config: Config) -> Flask:
                     "key": c["key"], "label": c["label"], "count": count,
                     "sample_id": sample[0]["id"] if sample else None,
                 })
+            # Catch-all: clips that match no category at all ("More B-Roll").
+            categorized = _categorized_ids(con)
+            uncat = [r for r in db.search(con, sort="modified", limit=100000)
+                     if r["id"] not in categorized]
+            if uncat:
+                out.append({
+                    "key": cats.UNCATEGORIZED_KEY, "label": cats.UNCATEGORIZED_LABEL,
+                    "count": len(uncat), "sample_id": uncat[0]["id"],
+                })
         finally:
             con.close()
         return jsonify({"categories": out})
@@ -143,9 +165,14 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/search")
     def api_search():
         q = request.args.get("q", "")
-        shooter = request.args.get("shooter") or None
-        shot = request.args.get("shot") or None
-        ext = request.args.get("ext") or None
+        # Filters may be comma-separated for multi-select (e.g. shooter=Gil,Tim).
+        def _multi(name):
+            raw = request.args.get(name) or ""
+            vals = [v.strip() for v in raw.split(",") if v.strip()]
+            return vals or None
+        shooter = _multi("shooter")
+        shot = _multi("shot")
+        extensions = _multi("ext")
         category = request.args.get("category") or None
         date_from = request.args.get("from") or None
         date_to = request.args.get("to") or None
@@ -155,21 +182,26 @@ def create_app(config: Config) -> Flask:
             offset = max(0, int(request.args.get("offset", 0)))
         except ValueError:
             limit, offset = 60, 0
-        extensions = [ext] if ext else None
-
-        # Combine free-text + category into one FTS expression (None if neither).
-        fts_expr = cats.combine_fts(q, category or "") if (q or category) else None
-        if fts_expr == "":
-            fts_expr = None
 
         con = get_db()
         try:
+            exclude_ids = None
+            if category == cats.UNCATEGORIZED_KEY:
+                # 'More B-Roll' = matches no category; keep free-text + filters.
+                exclude_ids = sorted(_categorized_ids(con))
+                fts_expr = cats.combine_fts(q, "") if q else None
+            else:
+                fts_expr = cats.combine_fts(q, category or "") if (q or category) else None
+            if fts_expr == "":
+                fts_expr = None
+
             rows = db.search(con, q, extensions=extensions, shot_type=shot,
                              shooter=shooter, date_from=date_from, date_to=date_to,
-                             sort=sort, limit=limit, offset=offset, fts_expr=fts_expr)
+                             sort=sort, limit=limit, offset=offset,
+                             fts_expr=fts_expr, exclude_ids=exclude_ids)
             total = db.search_count(con, q, extensions=extensions, shot_type=shot,
                                     shooter=shooter, date_from=date_from, date_to=date_to,
-                                    fts_expr=fts_expr)
+                                    fts_expr=fts_expr, exclude_ids=exclude_ids)
         finally:
             con.close()
         return jsonify({

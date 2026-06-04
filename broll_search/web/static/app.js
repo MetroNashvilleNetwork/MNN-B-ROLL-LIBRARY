@@ -1,7 +1,7 @@
 "use strict";
 
 const state = {
-  q: "", shooter: "", shot: "", ext: "", from: "", to: "",
+  q: "", shooter: [], shot: [], ext: [], from: "", to: "",
   category: "", categoryLabel: "", sort: "relevance",
   offset: 0, limit: 60, total: 0, loading: false, done: false, items: [],
 };
@@ -18,6 +18,21 @@ const fmtDuration = (sec) => {
 const fmtSize = (n) => { if (!n) return ""; const u=["B","KB","MB","GB","TB"]; let i=0; n=Number(n); while(n>=1024&&i<u.length-1){n/=1024;i++;} return `${i===0?n:n.toFixed(1)} ${u[i]}`; };
 const fmtDate = (iso) => { if(!iso) return ""; const d=new Date(iso); return isNaN(d)?iso:d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}); };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function highlight(text, q){
+  const safe = esc(text);
+  const toks = (q||"").split(/\s+/).filter((t)=>t.length>1).map((t)=>t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"));
+  if(!toks.length) return safe;
+  try { return safe.replace(new RegExp("("+toks.join("|")+")","gi"), "<mark>$1</mark>"); }
+  catch(e){ return safe; }
+}
+function countUp(node, target, dur){
+  if(!node) return; target=Number(target)||0;
+  const t0=performance.now();
+  const tick=(now)=>{ const p=Math.min(1,(now-t0)/dur); const eased=1-Math.pow(1-p,3);
+    node.textContent=Math.round(eased*target).toLocaleString();
+    if(p<1) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
 
 /* ---------- toast ---------- */
 let toastTimer;
@@ -47,9 +62,18 @@ function refreshCollUI(){
 /* ---------- filters ---------- */
 function chip(group, value, label){
   const c=document.createElement("div"); c.className="chip"; c.textContent=label??value; c.dataset.value=value;
-  c.addEventListener("click",()=>{ state[group]= state[group]===value ? "" : value;
-    document.querySelectorAll(`#f-${group} .chip`).forEach((x)=>x.classList.toggle("active",x.dataset.value===state[group]));
-    applyState(); });
+  c.tabIndex=0; c.setAttribute("role","button"); c.setAttribute("aria-pressed","false");
+  const toggle=()=>{
+    const arr=state[group]; const i=arr.indexOf(value);
+    if(i>=0) arr.splice(i,1); else arr.push(value);   // multi-select
+    document.querySelectorAll(`#f-${group} .chip`).forEach((x)=>{
+      const on=state[group].includes(x.dataset.value);
+      x.classList.toggle("active",on); x.setAttribute("aria-pressed",on?"true":"false");
+    });
+    applyState();
+  };
+  c.addEventListener("click",toggle);
+  c.addEventListener("keydown",(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(); } });
   return c;
 }
 async function loadFilters(){
@@ -62,32 +86,39 @@ async function loadFilters(){
   data.months.forEach((m)=>{ from.appendChild(new Option(m.label,m.date)); to.appendChild(new Option(m.label,m.date)); });
   from.addEventListener("change",()=>{ state.from=from.value; applyState(); });
   to.addEventListener("change",()=>{ state.to=to.value; applyState(); });
-  el("heroStat").innerHTML=`<b>${data.total.toLocaleString()}</b> clips ready to browse`;
+  el("heroStat").innerHTML=`<b>0</b> clips ready to browse`;
+  countUp(el("heroStat").querySelector("b"), data.total, 1000);
   if(!data.has_ffmpeg) el("ffmpegNote").classList.remove("hidden");
   return data;
 }
 
 /* ---------- tiles ---------- */
 const PLAY='<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+const CHEV_L='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
+const CHEV_R='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>';
 function tileHTML(item,w,h){
   itemIndex.set(item.id,item);
   const dur=item.duration?`<div class="tile-dur">${fmtDuration(item.duration)}</div>`:"";
   const badge=item.ext?`<div class="tile-badge">${esc(item.ext.toUpperCase())}</div>`:"";
   const tags=[item.shooter,item.month,item.shot_type].filter(Boolean).map(esc).join(" · ");
   const on=inColl(item.id);
-  return `<div class="tile" data-id="${item.id}" style="width:${w}px;height:${h}px">
+  return `<div class="tile" data-id="${item.id}" style="width:${w}px;height:${h}px" tabindex="0" role="button" aria-label="${esc(item.filename)}">
     <img loading="lazy" src="/thumb/${item.id}" alt="${esc(item.filename)}" />
     <video muted loop preload="none" playsinline></video>
     <div class="tile-scrim"></div>
-    <button class="tile-star ${on?"on":""}" data-id="${item.id}" title="Add to collection">${on?"✓":"★"}</button>
+    <button class="tile-star ${on?"on":""}" data-id="${item.id}" title="Add to collection" tabindex="-1">${on?"✓":"★"}</button>
     ${badge}${dur}
     <div class="tile-play">${PLAY}</div>
-    <div class="tile-info"><div class="tile-name">${esc(item.filename)}</div><div class="tile-tags">${tags}</div></div>
+    <div class="tile-info"><div class="tile-name">${highlight(item.filename, state.q)}</div><div class="tile-tags">${tags}</div></div>
   </div>`;
 }
 let activePreviewVideo = null;
 function wireTile(tile){
   const id=tile.dataset.id, video=tile.querySelector("video");
+  const img=tile.querySelector("img");
+  if(img){ if(img.complete && img.naturalWidth) tile.classList.add("loaded");
+    else { img.addEventListener("load",()=>tile.classList.add("loaded"),{once:true});
+           img.addEventListener("error",()=>tile.classList.add("loaded"),{once:true}); } }
   let hoverTimer;
   const stopVideo=()=>{
     tile.classList.remove("playing");
@@ -109,6 +140,10 @@ function wireTile(tile){
   },220); });
   tile.addEventListener("mouseleave",()=>{ clearTimeout(hoverTimer); stopVideo(); });
   tile.addEventListener("click",(e)=>{ if(e.target.closest(".tile-star")) return; openModal(id); });
+  tile.addEventListener("keydown",(e)=>{
+    if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openModal(id); }
+    else if(e.key.toLowerCase()==="c"){ toggleColl(id); }   // 'c' to (un)collect
+  });
   const star=tile.querySelector(".tile-star");
   if(star) star.addEventListener("click",(e)=>{ e.stopPropagation(); toggleColl(star.dataset.id); });
 }
@@ -129,13 +164,26 @@ async function loadHome(){
         <h3 class="row-title">${esc(sec.label)}</h3>
         <span class="row-count">${data.total.toLocaleString()}</span>
         <button class="row-seeall" data-cat="${sec.key}" data-label="${esc(sec.label)}">See all →</button>
-      </div><div class="row-scroller">${tiles}</div>`;
+      </div>
+      <div class="row-scroll-wrap">
+        <button class="row-arrow left" aria-label="Scroll left">${CHEV_L}</button>
+        <div class="row-scroller">${tiles}</div>
+        <button class="row-arrow right" aria-label="Scroll right">${CHEV_R}</button>
+      </div>`;
     rowsEl.appendChild(section);
     section.querySelectorAll(".tile").forEach(wireTile);
     section.querySelector(".row-seeall").addEventListener("click",(e)=>{
       openCategory(e.target.dataset.cat, e.target.dataset.label);
     });
+    const scroller=section.querySelector(".row-scroller");
+    section.querySelector(".row-arrow.left").addEventListener("click",()=>scroller.scrollBy({left:-scroller.clientWidth*0.82,behavior:"smooth"}));
+    section.querySelector(".row-arrow.right").addEventListener("click",()=>scroller.scrollBy({left:scroller.clientWidth*0.82,behavior:"smooth"}));
   }
+  // Reveal rows (and their tiles) as they scroll into view.
+  const ro=new IntersectionObserver((entries)=>{
+    entries.forEach((en)=>{ if(en.isIntersecting){ en.target.classList.add("revealed"); ro.unobserve(en.target); } });
+  },{rootMargin:"0px 0px -6% 0px"});
+  rowsEl.querySelectorAll(".row-section").forEach((s)=>ro.observe(s));
   refreshCollUI();
 }
 
@@ -155,7 +203,7 @@ function showBrowse(){
   window.scrollTo({top:0,behavior:"auto"});
 }
 function openCategory(key,label){
-  Object.assign(state,{category:key,categoryLabel:label,q:"",shooter:"",shot:"",ext:"",from:"",to:""});
+  Object.assign(state,{category:key,categoryLabel:label,q:"",shooter:[],shot:[],ext:[],from:"",to:""});
   el("search").value=""; el("miniSearch").value=""; el("f-from").value=""; el("f-to").value="";
   document.querySelectorAll(".chip.active").forEach((c)=>c.classList.remove("active"));
   showBrowse(); resetAndSearch();
@@ -163,7 +211,7 @@ function openCategory(key,label){
 
 /* go to home vs browse based on whether anything is active */
 function applyState(){
-  const active = state.q || state.category || state.shooter || state.shot || state.ext || state.from || state.to;
+  const active = state.q || state.category || state.shooter.length || state.shot.length || state.ext.length || state.from || state.to;
   if(active){ if(el("browse").classList.contains("hidden")) showBrowse(); resetAndSearch(); }
   else showHome();
 }
@@ -172,7 +220,10 @@ function applyState(){
 async function search(append=false){
   if(state.loading || (append && state.done)) return;
   state.loading=true; el("loader").classList.remove("hidden");
-  const params=new URLSearchParams({q:state.q,shooter:state.shooter,shot:state.shot,ext:state.ext,from:state.from,to:state.to,category:state.category,sort:state.sort,limit:state.limit,offset:state.offset});
+  const params=new URLSearchParams({q:state.q,from:state.from,to:state.to,category:state.category,sort:state.sort,limit:state.limit,offset:state.offset});
+  if(state.shooter.length) params.set("shooter",state.shooter.join(","));
+  if(state.shot.length) params.set("shot",state.shot.join(","));
+  if(state.ext.length) params.set("ext",state.ext.join(","));
   let data;
   try { data=await fetch("/api/search?"+params).then((r)=>r.json()); }
   catch(e){ state.loading=false; el("loader").classList.add("hidden"); toast("Search failed."); return; }
@@ -182,6 +233,10 @@ async function search(append=false){
   state.offset+=data.items.length;
   state.done = state.offset>=state.total || data.items.length===0;
   layout();
+  if(!append && grid.animate){
+    grid.animate([{opacity:0,transform:"translateY(10px)"},{opacity:1,transform:"none"}],
+                 {duration:340,easing:"cubic-bezier(.2,.7,.2,1)"});
+  }
   el("browseTitle").textContent = state.category ? state.categoryLabel : (state.q ? `“${state.q}”` : "All footage");
   el("count").textContent = `${state.total.toLocaleString()} clip${state.total===1?"":"s"}`;
   el("empty").classList.toggle("hidden", state.total!==0);
@@ -190,11 +245,8 @@ async function search(append=false){
 }
 function resetAndSearch(){ state.offset=0; state.done=false; search(false); }
 function updateActiveFilters(){
-  const bits=[];
-  if(state.shooter) bits.push(state.shooter);
-  if(state.shot) bits.push(state.shot);
-  if(state.ext) bits.push(state.ext.toUpperCase());
-  if(state.from||state.to) bits.push([state.from,state.to].filter(Boolean).join("→"));
+  const bits=[...state.shooter, ...state.shot, ...state.ext.map((e)=>e.toUpperCase())];
+  if(state.from||state.to) bits.push([state.from,state.to].filter(Boolean).map((d)=>d.slice(0,7)).join("→"));
   el("activeFilters").textContent = bits.length ? "· "+bits.join(" · ") : "";
 }
 
@@ -219,6 +271,17 @@ async function openModal(id){
   const data=await fetch(`/api/clip/${id}`).then((r)=>r.json());
   if(data.error) return; itemIndex.set(data.id,data);
   el("modalTitle").textContent=data.filename;
+  // AI description (from the MNN Clipper)
+  const desc=el("modalDesc");
+  if(data.description){ desc.textContent=data.description; desc.classList.remove("hidden"); }
+  else { desc.textContent=""; desc.classList.add("hidden"); }
+  // AI tags — clickable to search
+  const tagsEl=el("modalTags"); tagsEl.innerHTML="";
+  (data.tags||[]).forEach((t)=>{
+    const b=document.createElement("button"); b.className="modal-tag"; b.textContent=t;
+    b.addEventListener("click",()=>{ closeModal(); el("search").value=t; onSearchInput(t,el("miniSearch")); });
+    tagsEl.appendChild(b);
+  });
   const rows=[["Shooter",data.shooter],["Month",data.month],["Shot type",data.shot_type],["Type",(data.ext||"").toUpperCase()],
     ["Duration",fmtDuration(data.duration)],["Resolution",data.width&&data.height?`${data.width}×${data.height}`:""],
     ["Size",fmtSize(data.size)],["Modified",fmtDate(data.modified)],["Folder",data.folder]].filter(([,v])=>v);
@@ -267,29 +330,8 @@ async function reindex(){
   toast("Re-indexing the footage drive…"); if(!statusTimer) statusTimer=setInterval(pollStatus,1200);
 }
 
-/* ---------- hero cycling blurred video ---------- */
-let heroIds=[], heroIdx=0, heroActive=0, heroTimer;
-function startHero(ids){
-  heroIds=ids.filter(Boolean); if(!heroIds.length) return;
-  heroNext(); clearInterval(heroTimer); heroTimer=setInterval(heroNext,9000);
-}
-function heroNext(){
-  if(!heroIds.length) return;
-  const vids=[el("heroV1"),el("heroV2")];
-  const next=vids[1-heroActive], cur=vids[heroActive];
-  const id=heroIds[heroIdx % heroIds.length]; heroIdx++;
-  next.muted=true; next.loop=true;
-  next.src=`/preview/${id}`;
-  next.load();                       // force buffering (preload="none" won't otherwise)
-  const go=()=>{
-    next.classList.add("show");
-    next.play().catch(()=>{});
-    cur.classList.remove("show");
-    heroActive=1-heroActive;
-  };
-  // loadeddata = first frame ready; fall back to a timer if it never fires.
-  next.addEventListener("loadeddata", go, {once:true});
-}
+/* Hero background is now a pure-CSS animated aurora (see .hero-aurora in
+   style.css) — no video, no server load. */
 
 /* ---------- wiring ---------- */
 let searchDebounce;
@@ -298,13 +340,13 @@ el("search").addEventListener("input",(e)=>onSearchInput(e.target.value,el("mini
 el("miniSearch").addEventListener("input",(e)=>onSearchInput(e.target.value,el("search")));
 el("sort").addEventListener("change",(e)=>{ state.sort=e.target.value; if(!el("browse").classList.contains("hidden")) resetAndSearch(); });
 el("reindexBtn").addEventListener("click",reindex);
-el("clearBtn").addEventListener("click",()=>{ Object.assign(state,{q:"",shooter:"",shot:"",ext:"",from:"",to:"",category:""});
+el("clearBtn").addEventListener("click",()=>{ Object.assign(state,{q:"",shooter:[],shot:[],ext:[],from:"",to:"",category:""});
   el("search").value=""; el("miniSearch").value=""; el("f-from").value=""; el("f-to").value="";
   document.querySelectorAll(".chip.active").forEach((c)=>c.classList.remove("active")); showHome(); });
-el("backHome").addEventListener("click",()=>{ Object.assign(state,{q:"",shooter:"",shot:"",ext:"",from:"",to:"",category:""});
+el("backHome").addEventListener("click",()=>{ Object.assign(state,{q:"",shooter:[],shot:[],ext:[],from:"",to:"",category:""});
   el("search").value=""; el("miniSearch").value=""; document.querySelectorAll(".chip.active").forEach((c)=>c.classList.remove("active")); showHome(); });
 document.querySelectorAll(".suggest").forEach((b)=>b.addEventListener("click",()=>{ el("search").value=b.dataset.q; onSearchInput(b.dataset.q,el("miniSearch")); }));
-document.querySelectorAll("[data-home]").forEach((b)=>b.addEventListener("click",(e)=>{ e.preventDefault(); Object.assign(state,{q:"",shooter:"",shot:"",ext:"",from:"",to:"",category:""}); el("search").value=""; el("miniSearch").value=""; document.querySelectorAll(".chip.active").forEach((c)=>c.classList.remove("active")); showHome(); }));
+document.querySelectorAll("[data-home]").forEach((b)=>b.addEventListener("click",(e)=>{ e.preventDefault(); Object.assign(state,{q:"",shooter:[],shot:[],ext:[],from:"",to:"",category:""}); el("search").value=""; el("miniSearch").value=""; document.querySelectorAll(".chip.active").forEach((c)=>c.classList.remove("active")); showHome(); }));
 el("collectionBtn").addEventListener("click",openDrawer);
 el("copyAllBtn").addEventListener("click",()=>{ const paths=[...collection.values()].map((it)=>it.network_path||it.path).join("\n"); if(!paths){ toast("Collection is empty."); return; } navigator.clipboard?.writeText(paths); toast(`Copied ${collection.size} path(s).`); });
 el("clearCollBtn").addEventListener("click",()=>{ collection.clear(); saveColl(); refreshCollUI(); renderDrawer(); });
@@ -324,12 +366,4 @@ loadColl();
   await loadFilters();
   await loadHome();
   refreshCollUI();
-  // Hero montage = NATURE clips, only stable framings (no handheld/pan/tilt/tracking/zoom).
-  try {
-    const unstable = ["Handheld","Pan","Tilt","Tracking","Zoom"];
-    const d = await fetch("/api/search?category=nature&sort=modified&limit=40").then((r)=>r.json());
-    const stable = d.items.filter((i)=>!unstable.includes(i.shot_type));
-    const pool = (stable.length>=4 ? stable : d.items).map((i)=>i.id);
-    // Keep server capacity for user-initiated hover/detail previews.
-  } catch(e){}
 })();

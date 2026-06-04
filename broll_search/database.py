@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS files (
     width         INTEGER,
     height        INTEGER,
     codec         TEXT,
+    ai_description TEXT,
+    ai_tags       TEXT,
+    ai_category   TEXT,
     indexed_at    TEXT
 );
 
@@ -93,7 +96,7 @@ _FILE_COLUMNS = [
     "month_name", "shoot_year", "shoot_month", "shoot_date", "shot_type",
     "parent_folder", "folder_path", "keywords", "size_bytes", "mtime_ns",
     "date_created", "date_modified", "duration_sec", "width", "height",
-    "codec", "indexed_at",
+    "codec", "ai_description", "ai_tags", "ai_category", "indexed_at",
 ]
 
 
@@ -118,12 +121,22 @@ def connect(db_path: Path | str, *, ensure: bool = True) -> sqlite3.Connection:
     return con
 
 
+def _ensure_columns(con: sqlite3.Connection) -> None:
+    """Add newer columns to an existing 'files' table if missing (lightweight
+    migration for databases created before AI metadata existed)."""
+    have = {r[1] for r in con.execute("PRAGMA table_info(files)").fetchall()}
+    for col, decl in (("ai_description", "TEXT"), ("ai_tags", "TEXT"), ("ai_category", "TEXT")):
+        if col not in have:
+            con.execute(f"ALTER TABLE files ADD COLUMN {col} {decl}")
+
+
 def init_db(con: sqlite3.Connection) -> None:
     """Create tables/indexes/triggers if they do not exist (idempotent).
 
     Only writes when something is actually missing, so calling it repeatedly is
     cheap and doesn't needlessly grab the write lock."""
     con.executescript(_SCHEMA)  # every statement is CREATE ... IF NOT EXISTS
+    _ensure_columns(con)
     con.execute("PRAGMA journal_mode=WAL;")
     if con.execute("SELECT 1 FROM meta WHERE key='schema_version'").fetchone() is None:
         set_meta(con, "schema_version", str(SCHEMA_VERSION))
@@ -183,6 +196,16 @@ def upsert_file(con: sqlite3.Connection, record: dict) -> None:
         f"INSERT INTO files ({cols}) VALUES ({placeholders}) "
         f"ON CONFLICT(path) DO UPDATE SET {updates}",
         values,
+    )
+
+
+def update_ai_metadata(con: sqlite3.Connection, path: str, description, tags,
+                       category, keywords) -> None:
+    """Update just the AI fields (and keywords) for an already-indexed file —
+    used when the Clipper's metadata changes but the video file itself hasn't."""
+    con.execute(
+        "UPDATE files SET ai_description=?, ai_tags=?, ai_category=?, keywords=? WHERE path=?",
+        (description, tags, category, keywords, path),
     )
 
 
@@ -254,11 +277,13 @@ def _build_where(
     date_from: Optional[str],
     date_to: Optional[str],
     fts_expr: Optional[str] = None,
+    exclude_ids: Optional[list[int]] = None,
 ) -> tuple[str, str, list]:
     """Return (joins, where_sql, params) shared by search() and search_count().
 
     ``fts_expr``: a ready-made FTS5 MATCH expression (used for category OR
-    queries). When given it overrides the plain-text ``query`` building."""
+    queries). When given it overrides the plain-text ``query`` building.
+    ``exclude_ids``: file ids to omit (used for the 'uncategorized' catch-all)."""
     params: list = []
     where: list[str] = []
     joins = ""
@@ -285,17 +310,25 @@ def _build_where(
             params.extend(norm)
 
     if shot_type:
-        where.append("f.shot_type = ?")
-        params.append(shot_type)
+        vals = shot_type if isinstance(shot_type, (list, tuple)) else [shot_type]
+        if vals:
+            where.append(f"f.shot_type IN ({', '.join('?' for _ in vals)})")
+            params.extend(vals)
     if shooter:
-        where.append("f.shooter = ?")
-        params.append(shooter)
+        vals = shooter if isinstance(shooter, (list, tuple)) else [shooter]
+        if vals:
+            where.append(f"f.shooter IN ({', '.join('?' for _ in vals)})")
+            params.extend(vals)
     if date_from:
         where.append("f.shoot_date >= ?")
         params.append(date_from)
     if date_to:
         where.append("f.shoot_date <= ?")
         params.append(date_to)
+    if exclude_ids:
+        placeholders = ", ".join("?" for _ in exclude_ids)
+        where.append(f"f.id NOT IN ({placeholders})")
+        params.extend(exclude_ids)
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     return joins, where_sql, params
@@ -315,11 +348,12 @@ def search(
     limit: int = 1000,
     offset: int = 0,
     fts_expr: Optional[str] = None,
+    exclude_ids: Optional[list[int]] = None,
 ) -> list[sqlite3.Row]:
     """Search the index. All arguments are optional; with no query and no
     filters it returns the most recent files."""
     joins, where_sql, params = _build_where(
-        query, extensions, shot_type, shooter, date_from, date_to, fts_expr)
+        query, extensions, shot_type, shooter, date_from, date_to, fts_expr, exclude_ids)
     has_fts = "files_fts" in joins
 
     # Pick sort. Relevance only works with an FTS query; otherwise fall back.
@@ -347,10 +381,11 @@ def search_count(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     fts_expr: Optional[str] = None,
+    exclude_ids: Optional[list[int]] = None,
 ) -> int:
     """Total number of files matching a search (ignoring limit/offset)."""
     joins, where_sql, params = _build_where(
-        query, extensions, shot_type, shooter, date_from, date_to, fts_expr)
+        query, extensions, shot_type, shooter, date_from, date_to, fts_expr, exclude_ids)
     sql = f"SELECT COUNT(*) AS n FROM files f {joins} {where_sql}"
     return con.execute(sql, params).fetchone()["n"]
 

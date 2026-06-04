@@ -126,16 +126,23 @@ class MediaEngine:
         with self._lock_for(key):
             if out.exists() and out.stat().st_size > 0:
                 return out
-            scale = f"scale='min({self.preview_max_width},iw)':-2"
+            w = self.preview_max_width
+            # Normal scaler is fast for 8-bit; zscale is the fallback for 10-bit /
+            # 4:2:2 footage (yuv422p10le) that the swscale build can't convert.
+            filters = [
+                f"scale='min({w},iw)':-2,format=yuvj420p",
+                f"zscale={w}:-2,format=yuvj420p",
+            ]
             with self._gen_sem:  # cap concurrent ffmpeg jobs
-                for ss in ("1", "0"):  # try 1s in; fall back to first frame
-                    ok = self._run(
-                        [self.ffmpeg, "-y", "-ss", ss, "-i", src,
-                         "-frames:v", "1", "-vf", scale, "-q:v", "3", str(out)],
-                        timeout=60,
-                    )
-                    if ok and out.exists() and out.stat().st_size > 0:
-                        return out
+                for ss in ("1", "0"):       # try 1s in; fall back to first frame
+                    for vf in filters:
+                        ok = self._run(
+                            [self.ffmpeg, "-y", "-ss", ss, "-i", src,
+                             "-frames:v", "1", "-vf", vf, "-q:v", "3", str(out)],
+                            timeout=90,
+                        )
+                        if ok and out.exists() and out.stat().st_size > 0:
+                            return out
         return None
 
     # -- previews ---------------------------------------------------------
@@ -154,17 +161,24 @@ class MediaEngine:
             if out.exists() and out.stat().st_size > 0:
                 return out
             tmp = out.with_suffix(".partial.mp4")
-            scale = f"scale='min({self.preview_max_width},iw)':-2"
+            w = self.preview_max_width
+            filters = [f"scale='min({w},iw)':-2", f"zscale={w}:-2"]  # zscale = 10-bit fallback
+            ok = False
             with self._gen_sem:  # cap concurrent ffmpeg jobs
-                ok = self._run(
-                    [self.ffmpeg, "-y", "-i", src,
-                     "-t", str(self.preview_max_seconds),
-                     "-vf", scale,
-                     "-c:v", "libx264", "-crf", "28", "-preset", "veryfast",
-                     "-c:a", "aac", "-b:a", "96k",
-                     "-movflags", "+faststart", str(tmp)],
-                    timeout=600,
-                )
+                for vf in filters:
+                    ok = self._run(
+                        [self.ffmpeg, "-y", "-i", src,
+                         "-t", str(self.preview_max_seconds),
+                         "-vf", vf,
+                         "-c:v", "libx264", "-crf", "28", "-preset", "veryfast",
+                         # 8-bit 4:2:0 so 10-bit/422 sources still encode AND play in browsers
+                         "-pix_fmt", "yuv420p",
+                         "-c:a", "aac", "-b:a", "96k",
+                         "-movflags", "+faststart", str(tmp)],
+                        timeout=600,
+                    )
+                    if ok and tmp.exists() and tmp.stat().st_size > 0:
+                        break
             if ok and tmp.exists() and tmp.stat().st_size > 0:
                 tmp.replace(out)
                 return out
@@ -179,25 +193,29 @@ class MediaEngine:
 
     @staticmethod
     def placeholder_svg(label: str, sub: str = "") -> bytes:
-        """A simple labelled card used when no real thumbnail exists."""
+        """A clean dark 'preview unavailable' card shown when a thumbnail can't
+        be generated (usually because the source file is online-only/not synced
+        from SharePoint, so ffmpeg can't read it)."""
         def esc(s: str) -> str:
             return (s.replace("&", "&amp;").replace("<", "&lt;")
                     .replace(">", "&gt;").replace('"', "&quot;"))
-        label = esc(label[:60])
-        sub = esc(sub[:40])
-        return f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360">
+        sub = esc(sub[:48])
+        return f"""<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
   <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#2b3245"/><stop offset="1" stop-color="#1b2030"/>
+    <stop offset="0" stop-color="#0e1c30"/><stop offset="1" stop-color="#070f1d"/>
   </linearGradient></defs>
   <rect width="640" height="360" fill="url(#g)"/>
-  <g opacity="0.18">
-    <circle cx="320" cy="150" r="46" fill="#8b93a7"/>
-    <polygon points="305,128 305,172 345,150" fill="#1b2030"/>
+  <g transform="translate(320 150)" fill="none" stroke="#3f5d7d" stroke-width="3"
+     stroke-linejoin="round" opacity="0.7">
+    <rect x="-46" y="-32" width="92" height="64" rx="8"/>
+    <path d="M-46 -14 L46 -14"/>
+    <path d="M-30 -32 L-22 -14 M-10 -32 L-2 -14 M10 -32 L18 -14 M30 -32 L38 -14"/>
+    <circle cx="0" cy="9" r="11"/>
   </g>
-  <text x="320" y="250" font-family="Segoe UI, Arial" font-size="22"
-        fill="#e7eaf2" text-anchor="middle">{label}</text>
-  <text x="320" y="284" font-family="Segoe UI, Arial" font-size="16"
-        fill="#9aa3b8" text-anchor="middle">{sub}</text>
+  <text x="320" y="232" font-family="Segoe UI, Arial" font-size="17"
+        fill="#9fb0c6" text-anchor="middle" letter-spacing="0.5">Preview unavailable</text>
+  <text x="320" y="258" font-family="Segoe UI, Arial" font-size="13"
+        fill="#5f7186" text-anchor="middle">{sub}</text>
 </svg>""".encode("utf-8")
 
     def warm_cache(self, rows, log=None) -> dict:

@@ -72,6 +72,7 @@ class Config:
     extract_video_metadata: bool = True
     ffprobe_path: str = "ffprobe"
     ffmpeg_path: str = "ffmpeg"
+    metadata_manifest: str = ""   # optional explicit path to the Clipper's AI manifest
     web_port: int = 8765
     preview_max_width: int = 640
     preview_max_seconds: int = 60
@@ -237,6 +238,7 @@ def _build_config(raw: dict[str, Any], source: Path) -> Config:
         extract_video_metadata=bool(raw.get("extract_video_metadata", True)),
         ffprobe_path=str(raw.get("ffprobe_path", "ffprobe")),
         ffmpeg_path=str(raw.get("ffmpeg_path", "ffmpeg")),
+        metadata_manifest=str(raw.get("metadata_manifest", "")),
         web_port=int(raw.get("web_port", 8765)),
         preview_max_width=int(raw.get("preview_max_width", 640)),
         preview_max_seconds=int(raw.get("preview_max_seconds", 60)),

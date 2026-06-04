@@ -35,16 +35,37 @@ CATEGORIES: list[dict] = [
                   "blodgett", "vollrath", "cleveland", "groen", "hobart"]},
     {"key": "nature",     "label": "Nature & Seasons",
      "keywords": ["cherry", "blossom", "blossoms", "tree", "trees", "flower",
-                  "flowers", "sky", "park", "garden", "nature", "river", "leaves"]},
+                  "flowers", "sky", "park", "garden", "nature", "river", "leaves",
+                  "eagle", "bird", "flying", "shore", "cumberland"]},
+    {"key": "weather",    "label": "Weather & Sky",
+     "keywords": ["storm", "rain", "clouds", "cloud", "winter", "snow",
+                  "timelapse", "weather", "fog", "lightning", "sunset", "sunrise"]},
     {"key": "aerial",     "label": "Aerial & Drone",
      "keywords": ["dji", "drone", "aerial", "skyline", "overhead", "birdseye"]},
+    {"key": "education",  "label": "Education & Schools",
+     "keywords": ["teacher", "student", "students", "classroom", "school",
+                  "learning", "education", "lesson", "blackboard", "study"]},
     {"key": "people",     "label": "People",
      "keywords": ["woman", "man", "people", "person", "hands", "crowd", "worker",
-                  "staff", "child", "children", "family"]},
+                  "staff", "child", "children", "family", "senior", "daughter",
+                  "mother", "smartphone"]},
+    {"key": "finance",    "label": "Banking & Finance",
+     "keywords": ["bank", "banker", "investment", "checklist", "finance",
+                  "notepad", "employee", "money"]},
     {"key": "city",       "label": "City & Buildings",
      "keywords": ["building", "buildings", "downtown", "street", "storefront",
-                  "sign", "city", "skyline", "exterior", "architecture"]},
+                  "sign", "city", "skyline", "exterior", "ave", "avenue",
+                  "commerce", "alley", "intersection", "traffic", "bridge",
+                  "capital", "capitol", "square", "lamp", "march"]},
+    {"key": "architecture", "label": "Architecture & Interiors",
+     "keywords": ["ceiling", "window", "windows", "arcade", "walkthrough", "fan",
+                  "fans", "mural", "interior", "wall", "pillar", "glass",
+                  "hallway", "columns", "stairs", "studio", "gear"]},
 ]
+
+# Pseudo-category key for clips that match no real category (catch-all row).
+UNCATEGORIZED_KEY = "_more"
+UNCATEGORIZED_LABEL = "More B-Roll"
 
 _BY_KEY = {c["key"]: c for c in CATEGORIES}
 
@@ -69,6 +90,18 @@ def category_fts(key: str) -> str:
         return ""
     terms = _safe_terms(cat["keywords"])
     return " OR ".join(f"{t}*" for t in terms)
+
+
+def all_categories_fts() -> str:
+    """OR expression spanning EVERY category's keywords — used to find the clips
+    that belong to no category (the 'More B-Roll' catch-all)."""
+    terms: list[str] = []
+    for c in CATEGORIES:
+        terms.extend(_safe_terms(c["keywords"]))
+    # De-dup while preserving order.
+    seen: set[str] = set()
+    uniq = [t for t in terms if not (t in seen or seen.add(t))]
+    return " OR ".join(f"{t}*" for t in uniq)
 
 
 def combine_fts(user_query: str, category_key: str = "") -> str:

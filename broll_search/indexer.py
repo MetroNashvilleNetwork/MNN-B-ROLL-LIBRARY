@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import database as db
+from . import metadata
 from .config import Config, PROJECT_ROOT
 
 ProgressFn = Callable[[int, Optional[int], str], None]
@@ -291,6 +292,10 @@ def run_index(
             root_str = str(root)
             root_year = parse_year_from_root(root)
             result.roots_indexed.append(root_str)
+            # AI metadata from the MNN Clipper (manifest at root + per-file sidecars).
+            meta_idx = metadata.load_for_root(root, getattr(config, "metadata_manifest", None) or None)
+            if meta_idx.count:
+                _log(f"  Loaded AI metadata for {meta_idx.count} clip(s) from {meta_idx.loaded_from}")
             _log(f"Scanning {root} (year={root_year or 'unknown'}) …")
 
             seen: set[str] = set()
@@ -324,6 +329,21 @@ def run_index(
 
                     fp = db.get_existing_fingerprint(con, full)
                     if fp is not None and not full_rescan and fp == (st.st_size, st.st_mtime_ns):
+                        # File unchanged — but the Clipper's AI metadata may have been
+                        # added/updated since last index. Apply it cheaply (no ffprobe).
+                        ai = meta_idx.lookup(full, root_str)
+                        if ai and (ai["tags"] or ai["description"] or ai["category"]):
+                            base_kw = extract_keywords(Path(full).stem)
+                            extra_kw = extract_keywords(
+                                " ".join(ai["tags"]) + " " + ai["description"] + " " + ai["location"])
+                            new_kw = (base_kw + " " + extra_kw).strip()
+                            try:
+                                db.update_ai_metadata(
+                                    con, full, ai["description"] or None,
+                                    ", ".join(ai["tags"]) or None, ai["category"] or None, new_kw)
+                                pending += 1
+                            except Exception:  # noqa: BLE001
+                                pass
                         result.skipped += 1
                         continue
 
@@ -348,6 +368,18 @@ def run_index(
                     }
                     record.update(derive_path_fields(root, path_obj, root_year))
                     record.update(ff.probe(full))
+
+                    # Fold in the Clipper's AI metadata (tags + description) so it
+                    # is searchable and improves auto-categorization.
+                    ai = meta_idx.lookup(full, root_str)
+                    if ai:
+                        record["ai_description"] = ai["description"] or None
+                        record["ai_tags"] = ", ".join(ai["tags"]) or None
+                        record["ai_category"] = ai["category"] or None
+                        extra = " ".join(ai["tags"]) + " " + ai["description"] + " " + ai["location"]
+                        extra_kw = extract_keywords(extra)
+                        if extra_kw:
+                            record["keywords"] = (record["keywords"] + " " + extra_kw).strip()
 
                     try:
                         db.upsert_file(con, record)
