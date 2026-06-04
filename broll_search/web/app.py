@@ -8,8 +8,6 @@ a file's location uses ``/api/reveal`` which runs Explorer on this same machine.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -24,9 +22,23 @@ from .media import MediaEngine
 from . import categories as cats
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+SERVER_FOOTAGE_ROOT = r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
+NETWORK_FOOTAGE_ROOT = r"\\smb.data.nashville.org\MNNArchive\2026 Metro Nashville Archive B-Roll Footage"
+
+
+def _network_path(path: str) -> str:
+    norm_path = os.path.normcase(os.path.normpath(path))
+    norm_root = os.path.normcase(os.path.normpath(SERVER_FOOTAGE_ROOT))
+    if norm_path == norm_root:
+        return NETWORK_FOOTAGE_ROOT
+    if norm_path.startswith(norm_root + os.sep):
+        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(SERVER_FOOTAGE_ROOT))
+        return os.path.normpath(os.path.join(NETWORK_FOOTAGE_ROOT, rel))
+    return path
 
 
 def _row_to_dict(r) -> dict:
+    network_path = _network_path(r["path"])
     return {
         "id": r["id"],
         "filename": r["filename"],
@@ -42,6 +54,8 @@ def _row_to_dict(r) -> dict:
         "modified": r["date_modified"],
         "folder": r["folder_path"],
         "path": r["path"],
+        "network_path": network_path,
+        "network_folder": os.path.dirname(network_path),
     }
 
 
@@ -208,6 +222,25 @@ def create_app(config: Config) -> Flask:
             return send_file(str(p), mimetype="video/mp4", conditional=True)
         return Response(status=404)
 
+    @app.route("/download/<int:file_id>")
+    def download(file_id):
+        con = get_db()
+        try:
+            row = db.get_by_id(con, file_id)
+        finally:
+            con.close()
+        if not row:
+            return Response(status=404)
+        path = row["path"]
+        if not path or not os.path.exists(path):
+            return Response(status=404)
+        return send_file(
+            path,
+            as_attachment=True,
+            download_name=row["filename"] or os.path.basename(path),
+            conditional=True,
+        )
+
     @app.route("/api/reveal", methods=["POST"])
     def api_reveal():
         data = request.get_json(silent=True) or {}
@@ -218,8 +251,12 @@ def create_app(config: Config) -> Flask:
             con.close()
         if not row:
             return jsonify({"ok": False, "error": "not found"}), 404
-        _reveal(row["path"])
-        return jsonify({"ok": True})
+        network_path = _network_path(row["path"])
+        return jsonify({
+            "ok": True,
+            "path": network_path,
+            "folder": os.path.dirname(network_path),
+        })
 
     @app.route("/api/status")
     def api_status():
@@ -260,23 +297,6 @@ def create_app(config: Config) -> Flask:
         return jsonify({"ok": True})
 
     return app
-
-
-def _reveal(path: str) -> None:
-    if os.name == "nt":
-        if os.path.exists(path):
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
-        else:
-            folder = os.path.dirname(path)
-            if os.path.isdir(folder):
-                subprocess.Popen(["explorer", os.path.normpath(folder)])
-    else:
-        folder = path if os.path.isdir(path) else os.path.dirname(path)
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        try:
-            subprocess.Popen([opener, folder])
-        except OSError:
-            pass
 
 
 def _lan_ip() -> Optional[str]:

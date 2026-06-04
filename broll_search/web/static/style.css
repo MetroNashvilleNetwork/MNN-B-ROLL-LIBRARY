@@ -40,6 +40,9 @@ button.ghost { background:rgba(255,255,255,.05); border:1px solid var(--line-2);
 button.ghost:hover { background:rgba(255,255,255,.1); }
 button.ghost.sm { padding:7px 12px; font-size:13px; }
 button.ghost .ic { color:var(--brand); font-weight:700; }
+a.link-btn { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; border-radius:10px; }
+a.link-btn.ghost { background:rgba(255,255,255,.05); border:1px solid var(--line-2); color:var(--ink); padding:9px 14px; font-weight:500; white-space:nowrap; }
+a.link-btn.ghost:hover { background:rgba(255,255,255,.1); }
 select { font-family:inherit; color:var(--ink); background:var(--elev); border:1px solid var(--line-2); border-radius:9px; padding:8px 10px; cursor:pointer; }
 select option { background:var(--elev); }
 .badge-count { display:inline-grid; place-items:center; min-width:18px; height:18px; padding:0 5px; margin-left:2px;

@@ -32,7 +32,7 @@ function inColl(id){ return collection.has(Number(id)); }
 function toggleColl(id){
   id = Number(id);
   if (collection.has(id)) collection.delete(id);
-  else { const it = itemIndex.get(id); if (it) collection.set(id, {id:it.id,filename:it.filename,path:it.path,shooter:it.shooter,month:it.month}); }
+  else { const it = itemIndex.get(id); if (it) collection.set(id, {id:it.id,filename:it.filename,path:it.network_path||it.path,shooter:it.shooter,month:it.month}); }
   saveColl(); refreshCollUI();
 }
 function refreshCollUI(){
@@ -85,11 +85,29 @@ function tileHTML(item,w,h){
     <div class="tile-info"><div class="tile-name">${esc(item.filename)}</div><div class="tile-tags">${tags}</div></div>
   </div>`;
 }
-let hoverTimer;
+let activePreviewVideo = null;
 function wireTile(tile){
   const id=tile.dataset.id, video=tile.querySelector("video");
-  tile.addEventListener("mouseenter",()=>{ hoverTimer=setTimeout(()=>{ if(!video.src) video.src=`/preview/${id}`; tile.classList.add("playing"); video.play().catch(()=>{}); },170); });
-  tile.addEventListener("mouseleave",()=>{ clearTimeout(hoverTimer); tile.classList.remove("playing"); video.pause(); });
+  let hoverTimer;
+  const stopVideo=()=>{
+    tile.classList.remove("playing");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    if(activePreviewVideo===video) activePreviewVideo=null;
+  };
+  tile.addEventListener("mouseenter",()=>{ hoverTimer=setTimeout(()=>{
+    if(activePreviewVideo && activePreviewVideo!==video){
+      activePreviewVideo.pause();
+      activePreviewVideo.removeAttribute("src");
+      activePreviewVideo.load();
+    }
+    activePreviewVideo=video;
+    video.src=`/preview/${id}`;
+    tile.classList.add("playing");
+    video.play().catch(()=>{});
+  },220); });
+  tile.addEventListener("mouseleave",()=>{ clearTimeout(hoverTimer); stopVideo(); });
   tile.addEventListener("click",(e)=>{ if(e.target.closest(".tile-star")) return; openModal(id); });
   const star=tile.querySelector(".tile-star");
   if(star) star.addEventListener("click",(e)=>{ e.stopPropagation(); toggleColl(star.dataset.id); });
@@ -209,14 +227,14 @@ async function openModal(id){
   if(data.has_preview){ video.src=`/preview/${id}`; video.poster=`/thumb/${id}`; video.classList.remove("hidden"); noPrev.classList.add("hidden"); }
   else { video.classList.add("hidden"); video.removeAttribute("src"); noPrev.classList.remove("hidden"); }
   const cb=el("collectBtn"); cb.dataset.id=id; cb.onclick=()=>{ toggleColl(id); };
-  el("revealBtn").onclick=()=>reveal(id);
-  el("copyBtn").onclick=()=>{ navigator.clipboard?.writeText(data.path); toast("Path copied."); };
+  el("downloadBtn").onclick=()=>downloadClip(id);
+  el("copyBtn").onclick=()=>{ navigator.clipboard?.writeText(data.network_path||data.path); toast("Network path copied."); };
   el("modal").classList.remove("hidden"); refreshCollUI();
 }
 function closeModal(){ el("modal").classList.add("hidden"); const v=el("modalVideo"); v.pause(); v.removeAttribute("src"); }
-async function reveal(id){
-  try { const r=await fetch("/api/reveal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:Number(id)})}).then((r)=>r.json());
-    toast(r.ok?"Opening in File Explorer…":"Could not open location."); } catch(e){ toast("Could not open location."); }
+function downloadClip(id){
+  window.location.href=`/download/${id}`;
+  toast("Download started.");
 }
 
 /* ---------- collection drawer ---------- */
@@ -288,7 +306,7 @@ el("backHome").addEventListener("click",()=>{ Object.assign(state,{q:"",shooter:
 document.querySelectorAll(".suggest").forEach((b)=>b.addEventListener("click",()=>{ el("search").value=b.dataset.q; onSearchInput(b.dataset.q,el("miniSearch")); }));
 document.querySelectorAll("[data-home]").forEach((b)=>b.addEventListener("click",(e)=>{ e.preventDefault(); Object.assign(state,{q:"",shooter:"",shot:"",ext:"",from:"",to:"",category:""}); el("search").value=""; el("miniSearch").value=""; document.querySelectorAll(".chip.active").forEach((c)=>c.classList.remove("active")); showHome(); }));
 el("collectionBtn").addEventListener("click",openDrawer);
-el("copyAllBtn").addEventListener("click",()=>{ const paths=[...collection.values()].map((it)=>it.path).join("\n"); if(!paths){ toast("Collection is empty."); return; } navigator.clipboard?.writeText(paths); toast(`Copied ${collection.size} path(s).`); });
+el("copyAllBtn").addEventListener("click",()=>{ const paths=[...collection.values()].map((it)=>it.network_path||it.path).join("\n"); if(!paths){ toast("Collection is empty."); return; } navigator.clipboard?.writeText(paths); toast(`Copied ${collection.size} path(s).`); });
 el("clearCollBtn").addEventListener("click",()=>{ collection.clear(); saveColl(); refreshCollUI(); renderDrawer(); });
 document.querySelectorAll("[data-drawer-close]").forEach((x)=>x.addEventListener("click",closeDrawer));
 document.querySelectorAll("[data-close]").forEach((x)=>x.addEventListener("click",closeModal));
@@ -312,6 +330,6 @@ loadColl();
     const d = await fetch("/api/search?category=nature&sort=modified&limit=40").then((r)=>r.json());
     const stable = d.items.filter((i)=>!unstable.includes(i.shot_type));
     const pool = (stable.length>=4 ? stable : d.items).map((i)=>i.id);
-    startHero(pool.slice(0,10));
+    // Keep server capacity for user-initiated hover/detail previews.
   } catch(e){}
 })();

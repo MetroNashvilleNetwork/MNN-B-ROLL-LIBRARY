@@ -61,7 +61,7 @@ class MediaEngine:
     cache_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "cache")
     preview_max_width: int = 640
     preview_max_seconds: int = 60
-    max_concurrent: int = 3   # cap simultaneous ffmpeg jobs (avoid CPU storms)
+    max_concurrent: int = 1   # cap simultaneous ffmpeg jobs (avoid CPU storms)
 
     ffmpeg: Optional[str] = field(init=False, default=None)
     ffprobe: Optional[str] = field(init=False, default=None)
