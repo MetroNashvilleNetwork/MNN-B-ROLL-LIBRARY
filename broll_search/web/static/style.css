@@ -1,4 +1,4 @@
-/* ---- Fonts (bundled, offline): Geist sans, Fraunces serif, Geist Mono labels ---- */
+/* ---- Fonts (bundled, offline): Geist sans + Fraunces serif ---- */
 @font-face { font-family:"Geist"; font-weight:400; font-display:swap; src:url("/static/fonts/geist-400.woff2") format("woff2"); }
 @font-face { font-family:"Geist"; font-weight:500; font-display:swap; src:url("/static/fonts/geist-500.woff2") format("woff2"); }
 @font-face { font-family:"Geist"; font-weight:600; font-display:swap; src:url("/static/fonts/geist-600.woff2") format("woff2"); }
@@ -7,18 +7,6 @@
 @font-face { font-family:"Fraunces"; font-weight:500; font-display:swap; src:url("/static/fonts/fraunces-500.woff2") format("woff2"); }
 @font-face { font-family:"Fraunces"; font-weight:600; font-display:swap; src:url("/static/fonts/fraunces-600.woff2") format("woff2"); }
 @font-face { font-family:"Fraunces"; font-weight:700; font-display:swap; src:url("/static/fonts/fraunces-700.woff2") format("woff2"); }
-@font-face { font-family:"Geist Mono"; font-weight:400; font-display:swap; src:url("/static/fonts/geistmono-400.woff2") format("woff2"); }
-@font-face { font-family:"Geist Mono"; font-weight:500; font-display:swap; src:url("/static/fonts/geistmono-500.woff2") format("woff2"); }
-@font-face { font-family:"Geist Mono"; font-weight:600; font-display:swap; src:url("/static/fonts/geistmono-600.woff2") format("woff2"); }
-/* Creative pairing: Bricolage Grotesque (display) + Hanken Grotesk (body) */
-@font-face { font-family:"Bricolage"; font-weight:400; font-display:swap; src:url("/static/fonts/bricolage-400.woff2") format("woff2"); }
-@font-face { font-family:"Bricolage"; font-weight:600; font-display:swap; src:url("/static/fonts/bricolage-600.woff2") format("woff2"); }
-@font-face { font-family:"Bricolage"; font-weight:700; font-display:swap; src:url("/static/fonts/bricolage-700.woff2") format("woff2"); }
-@font-face { font-family:"Bricolage"; font-weight:800; font-display:swap; src:url("/static/fonts/bricolage-800.woff2") format("woff2"); }
-@font-face { font-family:"Hanken"; font-weight:400; font-display:swap; src:url("/static/fonts/hanken-400.woff2") format("woff2"); }
-@font-face { font-family:"Hanken"; font-weight:500; font-display:swap; src:url("/static/fonts/hanken-500.woff2") format("woff2"); }
-@font-face { font-family:"Hanken"; font-weight:600; font-display:swap; src:url("/static/fonts/hanken-600.woff2") format("woff2"); }
-@font-face { font-family:"Hanken"; font-weight:700; font-display:swap; src:url("/static/fonts/hanken-700.woff2") format("woff2"); }
 
 :root {
   /* Dark black -> deep-blue palette */
