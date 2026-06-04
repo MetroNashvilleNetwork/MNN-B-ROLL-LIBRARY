@@ -73,7 +73,7 @@ select option { background:var(--elev); }
 .hero-brand { display:inline-flex; align-items:center; gap:16px; text-decoration:none; color:inherit; }
 .hero-logo { width:58px; height:58px; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.5); }
 .hero-kicker { text-transform:uppercase; letter-spacing:.24em; font-size:12px; color:var(--brand); font-weight:600; }
-.hero-title { margin:4px 0 0; font-size:52px; font-weight:600; letter-spacing:-.01em; line-height:1.02; }
+.hero-title { margin:4px 0 0; font-size:52px; font-weight:600; letter-spacing:-.01em; line-height:1.02; color:#E5FF00; }
 .hero-tag { margin:18px 0 24px; font-size:17px; color:var(--ink-dim); max-width:600px; line-height:1.5; font-weight:300; }
 .hero-searchwrap { position:relative; display:flex; align-items:center; max-width:680px; color:var(--muted); }
 .hero-search-icon { position:absolute; left:20px; }
