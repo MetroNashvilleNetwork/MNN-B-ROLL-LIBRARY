@@ -162,7 +162,15 @@ class MediaEngine:
                 return out
             tmp = out.with_suffix(".partial.mp4")
             w = self.preview_max_width
-            filters = [f"scale='min({w},iw)':-2", f"zscale={w}:-2"]  # zscale = 10-bit fallback
+            # Force 8-bit 4:2:0 *inside* the filter chain (not just via -pix_fmt):
+            # browsers can only decode yuv420p H.264, and a lot of the source
+            # footage is 10-bit / 4:2:2 (ProRes yuv422p10le, HEVC yuv420p10le,
+            # MJPEG yuvj422p). Without this an encoded preview can keep the
+            # source's 10-bit/4:2:2 layout and play ~1s then freeze in the
+            # browser. zscale is the fallback scaler for 10-bit sources swscale
+            # can't convert. (Thumbnails already bake format= in the same way.)
+            filters = [f"scale='min({w},iw)':-2,format=yuv420p",
+                       f"zscale={w}:-2,format=yuv420p"]
             ok = False
             with self._gen_sem:  # cap concurrent ffmpeg jobs
                 for vf in filters:

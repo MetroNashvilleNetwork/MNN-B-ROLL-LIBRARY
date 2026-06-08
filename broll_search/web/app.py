@@ -20,6 +20,7 @@ from ..config import Config
 from .. import indexer, scheduler
 from .media import MediaEngine
 from . import categories as cats
+from . import doctor as doctor_mod
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SERVER_FOOTAGE_ROOT = r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
@@ -304,6 +305,24 @@ def create_app(config: Config) -> Flask:
             "count": count,
             "last_index": last,
         })
+
+    @app.route("/api/doctor")
+    def api_doctor():
+        con = get_db()
+        try:
+            report = doctor_mod.build_report(config, media, con)
+        finally:
+            con.close()
+        return jsonify(report)
+
+    @app.route("/doctor")
+    def doctor_page():
+        con = get_db()
+        try:
+            report = doctor_mod.build_report(config, media, con)
+        finally:
+            con.close()
+        return Response(doctor_mod.render_html(report), mimetype="text/html")
 
     @app.route("/api/reindex", methods=["POST"])
     def api_reindex():
