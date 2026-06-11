@@ -22,13 +22,16 @@ def main(argv=None) -> int:
     p.add_argument("--lut-dir", default="luts")
     p.add_argument("--ffmpeg", default="ffmpeg")
     p.add_argument("--ffprobe", default="ffprobe")
+    p.add_argument("--no-scored", action="store_true",
+                   help="Use filename order instead of quality scouting")
     args = p.parse_args(argv)
 
     try:
         res = run_pipeline(args.clips, args.music, args.out, args.theme,
                            target_total=args.duration, default_profile=args.profile,
                            lut_dir=args.lut_dir, ffmpeg_path=args.ffmpeg,
-                           ffprobe_path=args.ffprobe)
+                           ffprobe_path=args.ffprobe,
+                           scored=not args.no_scored)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

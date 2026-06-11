@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence
 
+from ..config import PROJECT_ROOT
 from ..web.media import _resolve_tool
 from .edl import EDL, validate_edl
 from .music import MusicInfo, analyze_music
-from .planner import plan
+from .planner import plan, plan_scored
 from .probe import ClipInfo, probe_clip
 from .render import render_format
+from .scout import scout_clip_cached, load_cache, save_cache
 
 VIDEO_EXTS = {".mp4", ".mov", ".mxf", ".m4v", ".mkv", ".avi"}
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac"}
@@ -34,6 +36,15 @@ def find_media(folder: Path, exts) -> List[Path]:
                   if p.is_file() and p.suffix.lower() in exts)
 
 
+def build_edl_scored(clip_paths: Sequence[str], music_path: str, theme: str,
+                     target_total: float, default_profile: str,
+                     cache: dict, window: float = 1.5) -> EDL:
+    scouts = [scout_clip_cached(p, cache, window=window) for p in clip_paths]
+    music = analyze_music(music_path)
+    return plan_scored(scouts, music, theme=theme, target_total=target_total,
+                       default_profile=default_profile)
+
+
 def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
               target_total: float, default_profile: str,
               ffprobe_path: str = "ffprobe") -> EDL:
@@ -46,7 +57,8 @@ def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
 def run_pipeline(clips_dir: str, music_dir: str, out_dir: str, theme: str,
                  target_total: float = 28.0, default_profile: str = "rec709",
                  lut_dir: str = "luts", ffmpeg_path: str = "ffmpeg",
-                 ffprobe_path: str = "ffprobe") -> RenderResult:
+                 ffprobe_path: str = "ffprobe",
+                 scored: bool = True, scout_cache=None) -> RenderResult:
     ffmpeg = _resolve_tool(ffmpeg_path, "ffmpeg")
     ffprobe = _resolve_tool(ffprobe_path, "ffprobe")
     if not ffmpeg or not ffprobe:
@@ -57,12 +69,22 @@ def run_pipeline(clips_dir: str, music_dir: str, out_dir: str, theme: str,
     clip_paths = [str(p) for p in find_media(Path(clips_dir), VIDEO_EXTS)]
     if not clip_paths:
         raise RuntimeError(f"No video clips found in {clips_dir}")
-    music = find_media(Path(music_dir), AUDIO_EXTS)
-    if not music:
+    music_files = find_media(Path(music_dir), AUDIO_EXTS)
+    if not music_files:
         raise RuntimeError(f"No music track found in {music_dir}")
+    music_path = str(music_files[0])
 
-    edl = build_edl(clip_paths, str(music[0]), theme, target_total,
-                    default_profile, ffprobe_path=ffprobe)
+    if scored:
+        cache_path = Path(scout_cache) if scout_cache else PROJECT_ROOT / "cache" / "editor_scout.json"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache = load_cache(cache_path)
+        edl = build_edl_scored(clip_paths, music_path, theme, target_total,
+                               default_profile, cache)
+        save_cache(cache_path, cache)
+    else:
+        edl = build_edl(clip_paths, music_path, theme, target_total,
+                        default_profile, ffprobe_path=ffprobe)
+
     errors = validate_edl(edl)
     if errors:
         raise RuntimeError("Invalid EDL:\n  - " + "\n  - ".join(errors))
