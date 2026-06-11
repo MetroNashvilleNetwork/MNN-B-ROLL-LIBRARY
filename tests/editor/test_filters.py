@@ -1,6 +1,6 @@
 from broll_search.editor.filters import (
     color_filter, reframe_filter, conform_filter, clip_video_chain,
-    LUT_FILES, LOOK_LUT,
+    LUT_FILES, LOOK_LUT, reframe_filter_anchored,
 )
 
 
@@ -28,7 +28,19 @@ def test_conform_filter_uses_fps():
 
 def test_clip_video_chain_order_and_format():
     chain = clip_video_chain("dji_dlogm", "luts", 1080, 1920, "24000/1001", 1.0)
-    # color -> reframe -> conform -> 8-bit 4:2:0 at the end
-    assert chain.index("dji_dlogm.cube") < chain.index("crop=1080:1920")
-    assert chain.index("crop=1080:1920") < chain.index("fps=24000/1001")
+    assert chain.index("dji_dlogm.cube") < chain.index("crop=w=1080:h=1920")
+    assert chain.index("crop=w=1080:h=1920") < chain.index("fps=24000/1001")
     assert chain.endswith("format=yuv420p")
+
+
+def test_reframe_anchored_uses_subject_and_escapes_commas():
+    f = reframe_filter_anchored(1080, 1920, 0.75)
+    assert f.startswith("scale=1080:1920:force_original_aspect_ratio=increase,crop=w=1080:h=1920:")
+    assert "0.75*iw-1080/2" in f
+    assert "\\," in f                       # commas inside clip() are escaped
+    assert "y=(ih-1920)/2" in f
+
+
+def test_reframe_anchored_clamps_subject():
+    assert "1.0*iw" in reframe_filter_anchored(1080, 1920, 5.0)    # clamped high -> 1.0
+    assert "0.0*iw" in reframe_filter_anchored(1080, 1920, -3.0)   # clamped low -> 0.0

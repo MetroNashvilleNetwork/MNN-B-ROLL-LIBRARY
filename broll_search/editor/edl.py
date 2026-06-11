@@ -17,6 +17,7 @@ class Clip:
     color_profile: str   # one of KNOWN_PROFILES
     role: str = "body"   # hook | body | closer (informational in Phase 1)
     stabilize: bool = False  # director sets True for shaky shots → renderer applies vidstab (later phase)
+    subject_x: float = 0.5   # 0=left..1=right; where to anchor the vertical reframe
 
     @property
     def duration(self) -> float:

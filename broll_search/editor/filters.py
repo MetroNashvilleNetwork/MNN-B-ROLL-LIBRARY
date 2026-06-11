@@ -35,16 +35,27 @@ def reframe_filter(width: int, height: int) -> str:
             f"crop={width}:{height}")
 
 
+def reframe_filter_anchored(width: int, height: int, subject_x: float = 0.5) -> str:
+    """Subject-anchored crop: scale to cover the WxH box, then crop a window whose
+    horizontal centre follows subject_x (0=left..1=right), clamped to stay in frame;
+    vertically centred. Commas inside clip() are backslash-escaped for the
+    filtergraph parser."""
+    sx = max(0.0, min(1.0, float(subject_x)))
+    x_expr = f"clip({sx}*iw-{width}/2\\,0\\,iw-{width})"
+    return (f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop=w={width}:h={height}:x={x_expr}:y=(ih-{height})/2")
+
+
 def conform_filter(fps: str = "24000/1001") -> str:
     return f"fps={fps}"
 
 
 def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
-                     fps: str, look_strength: float = 1.0) -> str:
+                     fps: str, look_strength: float = 1.0, subject_x: float = 0.5) -> str:
     """Full per-clip video filter chain: color -> reframe -> conform -> 8-bit 420."""
     return ",".join([
         color_filter(profile, lut_dir, look_strength),
-        reframe_filter(width, height),
+        reframe_filter_anchored(width, height, subject_x),
         conform_filter(fps),
         "format=yuv420p",
     ])

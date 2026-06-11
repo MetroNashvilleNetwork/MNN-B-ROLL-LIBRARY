@@ -33,3 +33,11 @@ def test_plan_scored_skips_zero_score_clips():
     edl = plan_scored(scouts, _music(), theme="t", target_total=6.0,
                       default_profile="rec709", pattern=(4,))
     assert [c.source for c in edl.clips] == ["FX6_good.mov"]
+
+
+def test_plan_scored_carries_subject_x():
+    scouts = [ClipScout("FX6_a.mov", score=5.0, best_in=0.0, best_out=2.0,
+                        duration=10, fps=24, subject_x=0.72)]
+    edl = plan_scored(scouts, _music(), theme="t", target_total=4.0,
+                      default_profile="rec709", pattern=(4,))
+    assert edl.clips[0].subject_x == 0.72

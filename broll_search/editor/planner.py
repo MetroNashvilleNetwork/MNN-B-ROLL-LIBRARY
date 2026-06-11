@@ -85,6 +85,7 @@ def plan_scored(
         edl_clips.append(Clip(
             id=cid, source=sc.path, in_point=in_point, out_point=out_point,
             color_profile=profile_for(sc.path, default_profile), role="body",
+            subject_x=sc.subject_x,
         ))
         cid += 1
     if edl_clips:
