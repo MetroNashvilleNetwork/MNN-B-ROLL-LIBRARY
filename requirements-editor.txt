@@ -1,0 +1,5 @@
+# MNN Auto-Editor — Phase 1 dependencies (in addition to the app's requirements.txt)
+numpy>=1.21,<2
+librosa>=0.10,<1
+soundfile>=0.12        # write synthetic test audio
+pytest>=7

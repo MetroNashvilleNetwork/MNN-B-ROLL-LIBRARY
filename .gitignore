@@ -22,3 +22,8 @@ env/
 # Bundled tools (if you drop ffprobe.exe into the project)
 ffprobe.exe
 ffmpeg.exe
+
+# Auto-Editor
+dev_media/
+output/
+.venv-editor/
