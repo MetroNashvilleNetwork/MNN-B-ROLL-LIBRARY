@@ -1,5 +1,6 @@
-# MNN Auto-Editor — Phase 1 dependencies (in addition to the app's requirements.txt)
-numpy>=1.21,<2
+# MNN Auto-Editor dependencies (in addition to the app's requirements.txt)
+numpy>=1.21,<3
 librosa>=0.10,<1
-soundfile>=0.12        # write synthetic test audio
+soundfile>=0.12                # write synthetic test audio
+opencv-python-headless>=4.8    # Phase 2: frame quality scoring / clip scouting
 pytest>=7
