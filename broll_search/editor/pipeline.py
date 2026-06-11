@@ -8,10 +8,12 @@ from typing import List, Sequence
 
 from ..config import PROJECT_ROOT
 from ..web.media import _resolve_tool
+from .director import DirectorCandidate, compose_edit
 from .edl import EDL, validate_edl
 from .music import MusicInfo, analyze_music
 from .planner import plan, plan_scored
 from .probe import ClipInfo, probe_clip
+from .proxies import proxy_for
 from .render import render_format
 from .scout import scout_clip_cached, load_cache, save_cache
 
@@ -45,6 +47,28 @@ def build_edl_scored(clip_paths: Sequence[str], music_path: str, theme: str,
                        default_profile=default_profile)
 
 
+def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
+                       target_total: float, default_profile: str,
+                       cache: dict, proxy_dir, ffmpeg_path: str, client,
+                       max_candidates: int = 40) -> EDL:
+    music = analyze_music(music_path)
+    ranked = []
+    for p in clip_paths:
+        sc = scout_clip_cached(p, cache)
+        if sc.score > 0 and sc.duration > 0:
+            ranked.append((p, sc))
+    ranked.sort(key=lambda ps: ps[1].score, reverse=True)
+    ranked = ranked[:max_candidates]
+    candidates = []
+    for i, (p, sc) in enumerate(ranked):
+        proxy = proxy_for(p, proxy_dir, ffmpeg_path=ffmpeg_path)
+        candidates.append(DirectorCandidate(
+            index=i, path=p, proxy_path=str(proxy), duration=sc.duration,
+            fps=sc.fps, score=sc.score, subject_x=sc.subject_x))
+    return compose_edit(theme, candidates, music, client,
+                        default_profile=default_profile, target_total=target_total)
+
+
 def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
               target_total: float, default_profile: str,
               ffprobe_path: str = "ffprobe") -> EDL:
@@ -54,11 +78,11 @@ def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
                 default_profile=default_profile)
 
 
-def run_pipeline(clips_dir: str, music_dir: str, out_dir: str, theme: str,
-                 target_total: float = 28.0, default_profile: str = "rec709",
-                 lut_dir: str = "luts", ffmpeg_path: str = "ffmpeg",
-                 ffprobe_path: str = "ffprobe",
-                 scored: bool = True, scout_cache=None) -> RenderResult:
+def run_pipeline(clips_dir, music_dir, out_dir, theme,
+                 target_total=28.0, default_profile="rec709",
+                 lut_dir="luts", ffmpeg_path="ffmpeg", ffprobe_path="ffprobe",
+                 scored=True, scout_cache=None, director_client=None,
+                 max_candidates=40, proxy_dir=None):
     ffmpeg = _resolve_tool(ffmpeg_path, "ffmpeg")
     ffprobe = _resolve_tool(ffprobe_path, "ffprobe")
     if not ffmpeg or not ffprobe:
@@ -74,16 +98,29 @@ def run_pipeline(clips_dir: str, music_dir: str, out_dir: str, theme: str,
         raise RuntimeError(f"No music track found in {music_dir}")
     music_path = str(music_files[0])
 
-    if scored:
-        cache_path = Path(scout_cache) if scout_cache else PROJECT_ROOT / "cache" / "editor_scout.json"
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache = load_cache(cache_path)
+    cache_path = Path(scout_cache) if scout_cache else PROJECT_ROOT / "cache" / "editor_scout.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache = load_cache(cache_path)
+
+    if director_client is not None:
+        pdir = Path(proxy_dir) if proxy_dir else PROJECT_ROOT / "cache" / "proxies"
+        try:
+            edl = build_edl_director(clip_paths, music_path, theme, target_total,
+                                     default_profile, cache, pdir, ffmpeg,
+                                     director_client, max_candidates)
+            errs = validate_edl(edl)
+        except Exception:
+            edl, errs = None, ["director failed"]
+        if edl is None or errs:
+            edl = build_edl_scored(clip_paths, music_path, theme, target_total,
+                                   default_profile, cache)
+    elif scored:
         edl = build_edl_scored(clip_paths, music_path, theme, target_total,
                                default_profile, cache)
-        save_cache(cache_path, cache)
     else:
         edl = build_edl(clip_paths, music_path, theme, target_total,
                         default_profile, ffprobe_path=ffprobe)
+    save_cache(cache_path, cache)
 
     errors = validate_edl(edl)
     if errors:

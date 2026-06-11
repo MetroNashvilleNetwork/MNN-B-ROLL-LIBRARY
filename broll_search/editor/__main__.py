@@ -24,14 +24,25 @@ def main(argv=None) -> int:
     p.add_argument("--ffprobe", default="ffprobe")
     p.add_argument("--no-scored", action="store_true",
                    help="Use filename order instead of quality scouting")
+    p.add_argument("--director", action="store_true",
+                   help="Use the Gemini AI director (needs GEMINI_API_KEY); falls back to scoring if unavailable")
     args = p.parse_args(argv)
+
+    director_client = None
+    if args.director:
+        from .gemini_client import make_gemini_client
+        director_client = make_gemini_client()
+        if director_client is None:
+            print("Note: --director set but no Gemini client (set GEMINI_API_KEY). "
+                  "Falling back to quality scoring.", file=sys.stderr)
 
     try:
         res = run_pipeline(args.clips, args.music, args.out, args.theme,
                            target_total=args.duration, default_profile=args.profile,
                            lut_dir=args.lut_dir, ffmpeg_path=args.ffmpeg,
                            ffprobe_path=args.ffprobe,
-                           scored=not args.no_scored)
+                           scored=not args.no_scored,
+                           director_client=director_client)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
