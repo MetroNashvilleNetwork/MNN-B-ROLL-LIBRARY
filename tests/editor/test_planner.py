@@ -35,3 +35,20 @@ def test_plan_clamps_segment_to_short_clip():
                default_profile="rec709", pattern=(4,))
     assert validate_edl(edl) == []
     assert edl.clips[0].duration <= 0.4
+
+
+def test_plan_skips_zero_duration_clip_without_wasting_segment():
+    clips = [_info("FX6_a.mov", 10), _info("DJI_bad.mp4", 0), _info("FX6_c.mov", 10)]
+    edl = plan(clips, _music(), theme="t", target_total=6.0,
+               default_profile="rec709", pattern=(4, 2, 3))
+    # the zero-duration clip is skipped; the two good clips are used
+    assert [c.source for c in edl.clips] == ["FX6_a.mov", "FX6_c.mov"]
+    assert [c.role for c in edl.clips] == ["hook", "closer"]
+
+
+def test_plan_more_segments_than_clips_keeps_closer_last():
+    clips = [_info("FX6_a.mov", 10), _info("DJI_b.mp4", 10)]
+    edl = plan(clips, _music(), theme="t", target_total=30.0,
+               default_profile="rec709", pattern=(2,))
+    assert len(edl.clips) == 2
+    assert edl.clips[0].role == "hook" and edl.clips[-1].role == "closer"

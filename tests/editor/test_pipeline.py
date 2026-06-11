@@ -29,3 +29,9 @@ def test_find_media_lists_supported_files(tmp_path):
     found = pipeline.find_media(tmp_path, pipeline.VIDEO_EXTS)
     names = sorted(p.name for p in found)
     assert names == ["a.MOV", "b.mp4"]
+
+
+def test_find_media_missing_dir_raises(tmp_path):
+    import pytest
+    with pytest.raises(RuntimeError):
+        pipeline.find_media(tmp_path / "does_not_exist", pipeline.VIDEO_EXTS)

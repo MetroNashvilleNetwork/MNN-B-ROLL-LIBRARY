@@ -29,7 +29,7 @@ def main(argv=None) -> int:
                            target_total=args.duration, default_profile=args.profile,
                            lut_dir=args.lut_dir, ffmpeg_path=args.ffmpeg,
                            ffprobe_path=args.ffprobe)
-    except RuntimeError as exc:
+    except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     print(f"Done. {len(res.edl.clips)} clips -> {res.vertical} and {res.landscape}")

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
+import numpy as np
 import librosa
 
 
@@ -19,7 +20,7 @@ class MusicInfo:
 def analyze_signal(y, sr) -> Tuple[float, List[float]]:
     """Return (tempo_bpm, beat_times_seconds) for an audio signal array."""
     tempo, beat_times = librosa.beat.beat_track(y=y, sr=sr, units="time")
-    return float(tempo), [float(b) for b in beat_times]
+    return float(np.atleast_1d(tempo)[0]), [float(b) for b in beat_times]
 
 
 def analyze_music(path: str) -> MusicInfo:

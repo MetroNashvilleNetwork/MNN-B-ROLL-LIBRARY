@@ -25,27 +25,31 @@ def plan(
 ) -> EDL:
     segments = beat_segment_endpoints(music.beats, target_total, pattern)
     edl_clips: List[Clip] = []
+    clip_idx = 0
     cid = 1
-    for i, (seg_start, seg_end) in enumerate(segments):
-        if i >= len(clips):
-            break  # ran out of distinct clips
-        info = clips[i]
+    for seg_start, seg_end in segments:
+        # advance past unusable (zero/negative-duration) clips without wasting the segment
+        while clip_idx < len(clips) and clips[clip_idx].duration <= 0:
+            clip_idx += 1
+        if clip_idx >= len(clips):
+            break  # no more usable clips
+        info = clips[clip_idx]
         seg_dur = seg_end - seg_start
-        if info.duration <= 0:
-            continue
         if info.duration >= seg_dur:
-            # center the segment within the available footage
             in_point = round(max(0.0, (info.duration - seg_dur) / 2.0), 3)
             out_point = round(in_point + seg_dur, 3)
         else:
-            # clip shorter than the beat segment — use the whole clip
             in_point, out_point = 0.0, round(info.duration, 3)
-        is_last = (i == len(segments) - 1) or (i == len(clips) - 1)
-        role = "hook" if cid == 1 else ("closer" if is_last else "body")
         edl_clips.append(Clip(
             id=cid, source=info.path, in_point=in_point, out_point=out_point,
-            color_profile=profile_for(info.path, default_profile), role=role,
+            color_profile=profile_for(info.path, default_profile), role="body",
         ))
+        clip_idx += 1
         cid += 1
+    # roles in a post-pass so hook/closer always land on real, surviving clips
+    if edl_clips:
+        edl_clips[0].role = "hook"
+        if len(edl_clips) > 1:
+            edl_clips[-1].role = "closer"
     return EDL(theme=theme, music=music.path, clips=edl_clips,
                duration_target_s=target_total)
