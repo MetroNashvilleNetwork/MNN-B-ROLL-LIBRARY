@@ -92,6 +92,7 @@ The EDL is the single interface between the creative director and the render eng
       "reframe": { "intent": "follow jogger entering from right",
                    "subject": "person", "anchor": "thirds_right" },  // INTENT only
       "color": { "profile": "DJI_DLogM" },    // → code applies correct conversion + look
+      "stabilize": true,                      // director requests vidstab when the shot is shaky
       "text": { "content": "Green space, everywhere you look",
                 "style": "title", "in": 0.2, "out": 2.4 },
       "cut_on_beat": true
@@ -102,7 +103,7 @@ The EDL is the single interface between the creative director and the render eng
 ```
 
 ### 5.2 What the director decides
-Clip selection · the **exact best in/out moment** in each clip · order and each clip's **role** · whether to **slow-mo** · **reframe intent** (subject + where to anchor) · which **text** appears and where · which **music** track fits.
+Clip selection · the **exact best in/out moment** in each clip · order and each clip's **role** · whether to **slow-mo** · whether the clip needs **stabilization** (full-vision can see the shake) · **reframe intent** (subject + where to anchor) · which **text** appears and where · which **music** track fits.
 
 ### 5.3 What the director does NOT do
 Per-frame crop coordinates · exact frame timing · color math. It supplies *intent*; deterministic code does the frame-exact work.
@@ -160,7 +161,7 @@ Per-frame subject detection (mediapipe / YOLO; OpenCV saliency fallback) → cen
 `librosa` beat grid + energy curve. The director's per-clip durations snap to **varied** beat multiples; cut density rises and falls with the music's energy (build/breathe). Optional downbeat refinement (madmom) is an upgrade, not a requirement (it is the one fragile Windows dependency).
 
 ### 7.5 Motion & polish (restraint by default)
-Hard cuts default; `xfade` dissolves only at section seams. **Ken Burns** (`zoompan`, upscale-first) gated onto **low-motion** clips only. **Stabilization** (`vidstab`) gated onto **shaky** clips only. No gratuitous transitions.
+Hard cuts default; `xfade` dissolves only at section seams. **Ken Burns** (`zoompan`, upscale-first) gated onto **low-motion** clips only. **Stabilization** (`vidstab`) applied per-clip when the EDL's `stabilize` flag is set — the director requests it for shaky shots (full-vision sees the shake), kept gated so already-stable clips are left untouched. No gratuitous transitions.
 
 ### 7.6 Text & branding
 Title card + sparse context lines + branded outro, rendered with the brand font/colors in **social safe zones** (avoid top ~14% / bottom ~20%; keep the right action-rail clear). Logo bug optional. *(Requires the brand kit — §14.)*

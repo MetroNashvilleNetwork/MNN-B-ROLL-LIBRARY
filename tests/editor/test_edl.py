@@ -30,3 +30,8 @@ def test_bad_inout_is_invalid():
 def test_unknown_profile_is_invalid():
     edl = EDL(theme="parks", music="m.wav", clips=[_clip(color_profile="bogus")])
     assert any("color_profile" in e for e in validate_edl(edl))
+
+
+def test_clip_stabilize_defaults_false_and_is_settable():
+    assert _clip().stabilize is False
+    assert _clip(stabilize=True).stabilize is True

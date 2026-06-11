@@ -16,6 +16,7 @@ class Clip:
     out_point: float     # seconds from clip start (> in_point)
     color_profile: str   # one of KNOWN_PROFILES
     role: str = "body"   # hook | body | closer (informational in Phase 1)
+    stabilize: bool = False  # director sets True for shaky shots → renderer applies vidstab (later phase)
 
     @property
     def duration(self) -> float:
