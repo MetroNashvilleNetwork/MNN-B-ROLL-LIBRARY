@@ -56,3 +56,25 @@ def test_cache_roundtrip(tmp_path):
                          "best_out": 1.0, "duration": 2.0, "fps": 30.0}})
     assert load_cache(p)["a"]["score"] == 1.0
     assert load_cache(tmp_path / "missing.json") == {}
+
+
+def test_scout_records_median_subject_x(monkeypatch):
+    import numpy as np
+    frames = [(0.0, np.zeros((4, 4, 3), np.uint8)),
+              (1.0, np.zeros((4, 4, 3), np.uint8)),
+              (2.0, np.zeros((4, 4, 3), np.uint8))]
+    monkeypatch.setattr(scout_mod, "sample_frames", lambda path, n=12: (24.0, 3.0, frames))
+    xs = iter([0.2, 0.8, 0.5])
+    monkeypatch.setattr(scout_mod, "frame_subject_x", lambda f: next(xs))
+    sc = scout_mod.scout_clip("x.mp4", window=1.0)
+    assert sc.subject_x == 0.5   # median of [0.2, 0.8, 0.5]
+
+
+@needs_ffmpeg
+def test_scout_subject_x_in_range(tmp_path):
+    import subprocess
+    clip = tmp_path / "c.mp4"
+    subprocess.run([ffmpeg, "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30",
+                    "-t", "2", "-pix_fmt", "yuv420p", str(clip)], check=True, capture_output=True)
+    sc = scout_clip(str(clip), window=1.0, n=8)
+    assert 0.0 <= sc.subject_x <= 1.0

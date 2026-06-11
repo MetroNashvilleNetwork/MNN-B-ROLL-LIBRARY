@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Tuple
 
 import cv2
 
-from .analysis import frame_quality
+from .analysis import frame_quality, subject_x as frame_subject_x
 
 
 @dataclass
@@ -24,6 +25,7 @@ class ClipScout:
     best_out: float     # seconds — end of the best window
     duration: float     # seconds
     fps: float
+    subject_x: float = 0.5   # 0=left .. 1=right; median across sampled frames
 
 
 def sample_frames(path: str, n: int = 12) -> Tuple[float, float, List[Tuple[float, "any"]]]:
@@ -62,8 +64,11 @@ def scout_clip(path: str, window: float = 1.5, n: int = 12) -> ClipScout:
     best_out = best_in + window
     if duration:
         best_out = min(best_out, duration)
+    sxs = [frame_subject_x(f) for _, f in frames]
+    sx = round(float(statistics.median(sxs)), 3) if sxs else 0.5
     return ClipScout(path=str(path), score=score, best_in=round(best_in, 3),
-                     best_out=round(best_out, 3), duration=round(duration, 3), fps=fps)
+                     best_out=round(best_out, 3), duration=round(duration, 3), fps=fps,
+                     subject_x=sx)
 
 
 # --- caching -------------------------------------------------------------
