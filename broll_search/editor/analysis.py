@@ -37,3 +37,39 @@ def frame_quality(frame: np.ndarray) -> float:
     sharpness scaled by how well-exposed the frame is."""
     g = to_gray(frame)
     return sharpness(g) * exposure_score(g)
+
+
+_FACE_CASCADE = None
+
+
+def _face_cascade():
+    """Lazily load the bundled frontal-face Haar cascade (empty if unavailable)."""
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        try:
+            _FACE_CASCADE = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        except Exception:
+            _FACE_CASCADE = cv2.CascadeClassifier()
+    return _FACE_CASCADE
+
+
+def subject_x(frame: np.ndarray) -> float:
+    """Normalized horizontal center (0..1) of the main subject:
+    largest frontal face if found, else the gradient-energy centroid
+    (cheap saliency proxy), else 0.5 (frame center)."""
+    g = to_gray(frame)
+    h, w = g.shape[:2]
+    if w == 0:
+        return 0.5
+    cascade = _face_cascade()
+    if cascade is not None and not cascade.empty():
+        faces = cascade.detectMultiScale(g, scaleFactor=1.2, minNeighbors=5)
+        if len(faces):
+            fx, _, fw, _ = max(faces, key=lambda f: int(f[2]) * int(f[3]))
+            return float((fx + fw / 2.0) / w)
+    lap = np.abs(cv2.Laplacian(g, cv2.CV_64F))
+    M = cv2.moments(lap)
+    if M["m00"] > 0:
+        return float((M["m10"] / M["m00"]) / w)
+    return 0.5
