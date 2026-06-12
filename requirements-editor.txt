@@ -4,4 +4,5 @@ librosa>=0.10,<1
 soundfile>=0.12                # write synthetic test audio
 opencv-python-headless>=4.8    # Phase 2: frame quality scoring / clip scouting
 google-genai>=1.0              # Phase 4: Gemini AI director (--director mode)
+Pillow>=10                     # Phase 6: branded title/outro card typography
 pytest>=7

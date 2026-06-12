@@ -41,3 +41,19 @@ def test_make_card_renders_branded_vertical(tmp_path):
                            "format=duration", "-of", "default=noprint_wrappers=1", str(out)],
                           capture_output=True, text=True).stdout
     assert "width=1080" in meta and "height=1920" in meta
+
+
+@needs
+def test_make_card_has_text_pixels(tmp_path):
+    import numpy as np
+    out = tmp_path / "c.mp4"
+    make_card(out, 1080, 1920, "24000/1001", title="HELLO", subtitle="world",
+              logo_path="", font_path=brand.brand_font(), ffmpeg_path=ffmpeg,
+              cwd=os.getcwd(), tmpdir=tmp_path, duration=1.0)
+    frame = tmp_path / "f.png"
+    subprocess.run([ffmpeg, "-y", "-i", str(out), "-frames:v", "1", str(frame)],
+                   check=True, capture_output=True)
+    import PIL.Image
+    arr = np.asarray(PIL.Image.open(frame).convert("L"))
+    # navy bg is dark (~16); cream text pixels are bright -> max brightness high
+    assert arr.max() > 180
