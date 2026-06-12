@@ -26,6 +26,7 @@ def main(argv=None) -> int:
                    help="Use filename order instead of quality scouting")
     p.add_argument("--director", action="store_true",
                    help="Use the Gemini AI director (needs GEMINI_API_KEY); falls back to scoring if unavailable")
+    p.add_argument("--no-brand", action="store_true", help="Skip the MNN title/outro cards")
     args = p.parse_args(argv)
 
     director_client = None
@@ -42,7 +43,8 @@ def main(argv=None) -> int:
                            lut_dir=args.lut_dir, ffmpeg_path=args.ffmpeg,
                            ffprobe_path=args.ffprobe,
                            scored=not args.no_scored,
-                           director_client=director_client)
+                           director_client=director_client,
+                           brand=not args.no_brand)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

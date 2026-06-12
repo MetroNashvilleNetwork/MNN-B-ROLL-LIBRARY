@@ -128,3 +128,19 @@ def test_render_slowmo_stretches_duration(tmp_path):
     render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path)
     # 1.0s of 60fps source, slowed by ~2.5x -> ~2.5s on screen
     assert 2.2 < _ffprobe_duration(out) < 2.8
+
+
+def test_render_with_branding_adds_cards(tmp_path):
+    a = tmp_path / "FX6_a.mp4"
+    _make_clip(a, 3, 60)
+    music = tmp_path / "m.wav"
+    _make_tone(music, 30)
+    edl = EDL(theme="Nashville Parks", music=str(music), clips=[
+        Clip(1, str(a), 0.0, 1.5, "rec709", "hook"),
+        Clip(2, str(a), 0.0, 1.0, "rec709", "closer")])
+    out = tmp_path / "branded.mp4"
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg,
+                  tmpdir=tmp_path, brand_enabled=True)
+    assert out.exists()
+    # clips total ~2.5s; title+outro cards add ~3s -> well over 4s
+    assert _ffprobe_duration(out) > 4.0

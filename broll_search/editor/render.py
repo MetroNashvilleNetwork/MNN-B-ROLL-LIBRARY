@@ -49,6 +49,8 @@ def render_format(
     look_strength: float = 1.0,
     tmpdir: Optional[Path] = None,
     cwd: Optional[Path] = None,
+    brand_enabled: bool = False,
+    font_path: str = "",
 ) -> Path:
     if not edl.clips:
         raise ValueError("render_format: EDL has no clips")
@@ -63,6 +65,17 @@ def render_format(
     try:
         # 1) per-clip normalized intermediates
         seg_files = []
+        card_font = ""
+        if brand_enabled and edl.clips:
+            from . import brand as _brand
+            from .branding import make_card
+            card_font = _brand.brand_font(font_path)
+            if card_font:
+                title = make_card(tmp / "card_00_title.mp4", width, height, edl.fps,
+                                  title=edl.theme, subtitle="", logo_path=str(_brand.LOGO_PATH),
+                                  font_path=card_font, ffmpeg_path=ffmpeg_path, cwd=run_cwd,
+                                  tmpdir=tmp, duration=1.8)
+                seg_files.append(title)
         for clip in edl.clips:
             seg = tmp / f"seg_{clip.id:03d}.mp4"
             vf = clip_video_chain(clip.color_profile, lut_dir, width, height,
@@ -74,6 +87,13 @@ def render_format(
                   "-pix_fmt", "yuv420p", str(seg)],
                  cwd=run_cwd, timeout=600)
             seg_files.append(seg)
+
+        if brand_enabled and card_font and edl.clips:
+            outro = make_card(tmp / "card_zz_outro.mp4", width, height, edl.fps,
+                              title=_brand.WORDMARK, subtitle="", logo_path=str(_brand.LOGO_PATH),
+                              font_path=card_font, ffmpeg_path=ffmpeg_path, cwd=run_cwd,
+                              tmpdir=tmp, duration=1.6)
+            seg_files.append(outro)
 
         # 2) concat intermediates (identical params -> stream copy)
         listfile = tmp / "concat.txt"

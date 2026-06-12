@@ -82,7 +82,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  target_total=28.0, default_profile="rec709",
                  lut_dir="luts", ffmpeg_path="ffmpeg", ffprobe_path="ffprobe",
                  scored=True, scout_cache=None, director_client=None,
-                 max_candidates=40, proxy_dir=None):
+                 max_candidates=40, proxy_dir=None,
+                 brand: bool = True, font_path: str = ""):
     ffmpeg = _resolve_tool(ffmpeg_path, "ffmpeg")
     ffprobe = _resolve_tool(ffprobe_path, "ffprobe")
     if not ffmpeg or not ffprobe:
@@ -129,9 +130,11 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     vertical = render_format(edl, out / "vertical.mp4", 1080, 1920,
-                             lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out)
+                             lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
+                             brand_enabled=brand, font_path=font_path)
     landscape = render_format(edl, out / "landscape.mp4", 1920, 1080,
-                              lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out)
+                              lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
+                              brand_enabled=brand, font_path=font_path)
     (out / "edl.json").write_text(_edl_to_json(edl), encoding="utf-8")
     return RenderResult(edl=edl, vertical=vertical, landscape=landscape, out_dir=out)
 
