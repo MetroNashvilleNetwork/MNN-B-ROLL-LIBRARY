@@ -18,7 +18,7 @@ from typing import Optional, Sequence
 
 from .director import DirectorClient, EDL_RESPONSE_SCHEMA
 
-DEFAULT_MODEL = "gemini-2.0-flash-001"   # video-capable + cheap; bump to a gemini-3 model when desired
+DEFAULT_MODEL = "gemini-flash-latest"   # current flash alias (video-capable); pin a dated version for production stability
 
 
 class GeminiDirectorClient(DirectorClient):
