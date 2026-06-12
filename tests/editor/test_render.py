@@ -108,3 +108,23 @@ def test_empty_edl_raises():
     edl = EDL(theme="t", music="m.wav", clips=[])
     with pytest.raises(ValueError, match="no clips"):
         render_format(edl, Path("/tmp/never.mp4"), width=1080, height=1920)
+
+
+def _ffprobe_duration(path):
+    out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout.strip()
+    return float(out)
+
+
+def test_render_slowmo_stretches_duration(tmp_path):
+    src = tmp_path / "FX6_60.mp4"
+    subprocess.run([ffmpeg, "-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=60",
+                    "-t", "3", "-pix_fmt", "yuv420p", str(src)], check=True, capture_output=True)
+    music = tmp_path / "m.wav"
+    _make_tone(music, 20)
+    edl = EDL(theme="t", music=str(music), clips=[
+        Clip(1, str(src), 0.0, 1.0, "rec709", "hook", retime="slowmo", source_fps=60.0)])
+    out = tmp_path / "v.mp4"
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+    # 1.0s of 60fps source, slowed by ~2.5x -> ~2.5s on screen
+    assert 2.2 < _ffprobe_duration(out) < 2.8

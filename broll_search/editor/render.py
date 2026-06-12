@@ -66,9 +66,10 @@ def render_format(
         for clip in edl.clips:
             seg = tmp / f"seg_{clip.id:03d}.mp4"
             vf = clip_video_chain(clip.color_profile, lut_dir, width, height,
-                                  edl.fps, look_strength, subject_x=clip.subject_x)
-            _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-i", clip.source,
-                  "-t", str(clip.duration), "-an", "-vf", vf, "-r", edl.fps,
+                                  edl.fps, look_strength, subject_x=clip.subject_x,
+                                  retime=clip.retime, source_fps=clip.source_fps)
+            _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-t", str(clip.duration),
+                  "-i", clip.source, "-an", "-vf", vf, "-r", edl.fps,
                   "-c:v", "libx264", "-crf", "18", "-preset", "medium",
                   "-pix_fmt", "yuv420p", str(seg)],
                  cwd=run_cwd, timeout=600)

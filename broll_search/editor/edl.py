@@ -18,6 +18,8 @@ class Clip:
     role: str = "body"   # hook | body | closer (informational in Phase 1)
     stabilize: bool = False  # director sets True for shaky shots → renderer applies vidstab (later phase)
     subject_x: float = 0.5   # 0=left..1=right; where to anchor the vertical reframe
+    retime: str = "normal"      # "normal" | "slowmo"
+    source_fps: float = 0.0     # used to compute the slow-mo factor when retime == "slowmo"
 
     @property
     def duration(self) -> float:

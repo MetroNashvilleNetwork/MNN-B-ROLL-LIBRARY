@@ -50,12 +50,43 @@ def conform_filter(fps: str = "24000/1001") -> str:
     return f"fps={fps}"
 
 
+def _fps_to_float(fps) -> float:
+    s = str(fps)
+    if "/" in s:
+        n, d = s.split("/", 1)
+        try:
+            return float(n) / float(d) if float(d) else 0.0
+        except ValueError:
+            return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def retime_filter(retime: str, source_fps: float, target_fps: str = "24000/1001") -> str:
+    """Return a setpts slow-motion filter, or '' if no slowdown applies.
+    Slowmo plays every source frame at the target rate -> factor = source/target."""
+    if retime != "slowmo":
+        return ""
+    tgt = _fps_to_float(target_fps)
+    if not source_fps or not tgt or source_fps <= tgt * 1.1:
+        return ""
+    factor = round(source_fps / tgt, 4)
+    return f"setpts={factor}*PTS"
+
+
 def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
-                     fps: str, look_strength: float = 1.0, subject_x: float = 0.5) -> str:
-    """Full per-clip video filter chain: color -> reframe -> conform -> 8-bit 420."""
-    return ",".join([
+                     fps: str, look_strength: float = 1.0, subject_x: float = 0.5,
+                     retime: str = "normal", source_fps: float = 0.0) -> str:
+    """Full per-clip video filter chain: color -> reframe -> [setpts] -> conform -> 8-bit 420."""
+    parts = [
         color_filter(profile, lut_dir, look_strength),
         reframe_filter_anchored(width, height, subject_x),
-        conform_filter(fps),
-        "format=yuv420p",
-    ])
+    ]
+    rt = retime_filter(retime, source_fps, fps)
+    if rt:
+        parts.append(rt)
+    parts.append(conform_filter(fps))
+    parts.append("format=yuv420p")
+    return ",".join(parts)

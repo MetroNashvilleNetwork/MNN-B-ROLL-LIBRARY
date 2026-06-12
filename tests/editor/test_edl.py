@@ -35,3 +35,9 @@ def test_unknown_profile_is_invalid():
 def test_clip_stabilize_defaults_false_and_is_settable():
     assert _clip().stabilize is False
     assert _clip(stabilize=True).stabilize is True
+
+
+def test_clip_retime_defaults():
+    c = _clip()
+    assert c.retime == "normal" and c.source_fps == 0.0
+    assert _clip(retime="slowmo", source_fps=60.0).retime == "slowmo"
