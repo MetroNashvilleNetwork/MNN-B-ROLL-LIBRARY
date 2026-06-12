@@ -27,3 +27,5 @@ ffmpeg.exe
 dev_media/
 output/
 .venv-editor/
+.gemini_key
+_autoedit_settings.bat

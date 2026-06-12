@@ -1,0 +1,68 @@
+==============================================================
+ MNN AUTO-EDITOR — Manager Guide
+==============================================================
+
+WHAT IT DOES
+  Automatically turns your b-roll footage into finished social videos —
+  a vertical (9:16, for Reels/TikTok/Shorts) and a landscape (16:9)
+  version — graded with your LUTs and cut to music. An AI "director"
+  watches the footage and chooses the best clips and moments.
+  It runs by itself twice a week, or on demand.
+
+--------------------------------------------------------------
+ONE-TIME SETUP (do this once on the server)
+--------------------------------------------------------------
+  1. Make sure Python 3.9+ is installed (python.org/downloads — tick
+     "Add Python to PATH" during install).
+
+  2. Make sure ffmpeg is available: either installed on the system, or
+     put ffmpeg.exe + ffprobe.exe into the "tools" folder. Use a FULL
+     build from https://www.gyan.dev/ffmpeg/builds/ (ffmpeg-release-full).
+
+  3. Double-click  "Setup Auto-Editor (first time).bat"
+     It will:
+       - install everything the editor needs,
+       - ask for your FOOTAGE folder (the mapped B-Roll drive),
+       - ask for a MUSIC folder (tracks you have the rights to use),
+       - ask for the camera profile (sony_slog3 for the FX6,
+         dji_dlogm for the Osmo Pocket 3, or rec709),
+       - ask for your Gemini API key (turns on the AI director),
+       - offer to schedule the automatic twice-weekly run.
+
+  Get a Gemini API key at https://aistudio.google.com ("Get API key").
+  For production, IT may prefer Google "Vertex AI" for data governance —
+  ask your developer; the key step is the quick path to start.
+
+--------------------------------------------------------------
+EVERYDAY USE
+--------------------------------------------------------------
+  - It runs automatically (if you scheduled it): Mondays + Thursdays 6am.
+  - To make a video right now: double-click  "Make Videos Now.bat".
+  - Finished videos appear in the  output\  folder. Open the NEWEST
+    folder inside — you'll find  vertical.mp4  and  landscape.mp4
+    (plus edl.json, a record of which clips were used).
+  - Review the video, then post it from your normal social tools.
+    (The editor never posts anything itself.)
+
+--------------------------------------------------------------
+GOOD TO KNOW
+--------------------------------------------------------------
+  - Footage with the AI director leaves the building: small low-res
+    previews are sent to Google to be analyzed. The original footage and
+    the finished videos stay on the server. (Vertex AI keeps this within
+    enterprise data controls — recommended for production.)
+  - Without a Gemini key, it still works — it just uses an offline
+    "best clips" selection instead of the AI director.
+  - First run analyzes all the footage (slower); later runs reuse that
+    analysis and are faster.
+
+--------------------------------------------------------------
+IF SOMETHING GOES WRONG
+--------------------------------------------------------------
+  - "Python not found"  -> install Python 3 with "Add to PATH", re-run Setup.
+  - "ffmpeg not found"  -> put ffmpeg.exe + ffprobe.exe in the tools\ folder.
+  - No videos appear    -> run "Make Videos Now.bat" and read the message
+                           in the black window; send it to your developer.
+  - Re-run "Setup Auto-Editor (first time).bat" anytime to change the
+    footage folder, music folder, profile, theme, or key.
+==============================================================
