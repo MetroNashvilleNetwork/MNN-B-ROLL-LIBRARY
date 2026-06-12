@@ -66,3 +66,28 @@ def test_compose_edit_with_fake_client():
 def test_schema_shape():
     assert EDL_RESPONSE_SCHEMA["type"] == "object"
     assert "timeline" in EDL_RESPONSE_SCHEMA["properties"]
+
+
+def test_parse_sets_retime_and_source_fps():
+    data = {"timeline": [
+        {"clip_index": 0, "in": 0, "out": 1, "role": "hook", "retime": "slowmo"},
+        {"clip_index": 1, "in": 0, "out": 2, "role": "body"},
+    ]}
+    edl = parse_director_edl(data, _cands(), "t", _music())
+    assert edl.clips[0].retime == "slowmo" and edl.clips[0].source_fps == 60   # cand 0 fps=60
+    assert edl.clips[1].retime == "normal"                                     # default
+
+
+def test_parse_rejects_bad_retime():
+    data = {"timeline": [{"clip_index": 0, "in": 0, "out": 1, "role": "hook", "retime": "weird"}]}
+    edl = parse_director_edl(data, _cands(), "t", _music())
+    assert edl.clips[0].retime == "normal"
+
+
+def test_prompt_mentions_slowmo():
+    assert "slow" in build_director_prompt("Parks", _cands(), _music(), 24).lower()
+
+
+def test_schema_has_retime():
+    props = EDL_RESPONSE_SCHEMA["properties"]["timeline"]["items"]["properties"]
+    assert "retime" in props

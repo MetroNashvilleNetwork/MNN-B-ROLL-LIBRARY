@@ -40,6 +40,7 @@ EDL_RESPONSE_SCHEMA = {
                     "role": {"type": "string", "enum": ["hook", "body", "closer"]},
                     "subject_x": {"type": "number"},
                     "stabilize": {"type": "boolean"},
+                    "retime": {"type": "string", "enum": ["normal", "slowmo"]},
                     "reason": {"type": "string"},
                 },
                 "required": ["clip_index", "in", "out", "role"],
@@ -74,6 +75,7 @@ WATCH the clips and compose the edit. Output a `timeline`: an ordered list of cu
 - role: "hook" for the very first (most arresting) shot, "closer" for the last, "body" otherwise
 - subject_x: 0.0=left .. 1.0=right, where the main subject sits, so vertical cropping keeps them framed
 - stabilize: true ONLY if the shot is visibly shaky
+- retime: "slowmo" to play the shot as smooth slow motion (great for high-fps clips with flowing motion — water, crowds, movement); else "normal". NOTE: slowmo plays the clip roughly (its fps / 24) times slower, so a 1s in/out span becomes ~2.5s on screen for 60fps footage — pick a SHORTER in/out span for slowmo shots.
 - reason: one short phrase on why you chose this shot/moment
 
 Craft rules (make it look human-made, NOT auto-generated):
@@ -112,10 +114,14 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
             sx = max(0.0, min(1.0, float(item.get("subject_x", cand.subject_x))))
         except (TypeError, ValueError):
             sx = cand.subject_x
+        retime = item.get("retime", "normal")
+        if retime not in ("normal", "slowmo"):
+            retime = "normal"
         clips.append(Clip(
             id=cid, source=cand.path, in_point=round(in_p, 3), out_point=round(out_p, 3),
             color_profile=profile_for(cand.path, default_profile), role=role,
-            stabilize=bool(item.get("stabilize", False)), subject_x=round(sx, 3)))
+            stabilize=bool(item.get("stabilize", False)), subject_x=round(sx, 3),
+            retime=retime, source_fps=cand.fps))
         cid += 1
     return EDL(theme=theme, music=music.path, clips=clips, duration_target_s=target_total)
 
