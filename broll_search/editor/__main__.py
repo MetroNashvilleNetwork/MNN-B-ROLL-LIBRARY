@@ -34,8 +34,10 @@ def main(argv=None) -> int:
                    help="Disable per-clip stabilization (overrides cinematic default of ON)")
     p.add_argument("--no-exposure", action="store_true",
                    help="Disable per-clip exposure correction (overrides cinematic default of ON)")
-    p.add_argument("--slowmo-ceiling", type=float, default=0.70,
-                   help="Max fraction of total runtime that may be slow-mo (default 0.70)")
+    p.add_argument("--slowmo-ceiling", type=float, default=0.85,
+                   help="Max fraction of total runtime that may be slow-mo (default 0.85)")
+    p.add_argument("--outro", choices=["card", "fade", "none"], default="fade",
+                   help="Ending: 'fade' = fade to black (default), 'card' = branded outro card, 'none' = hard cut")
     p.add_argument("--preview", action="store_true",
                    help="Fast preview render (2160p prescale, for dev/Mac); omit for 4K-final quality")
     args = p.parse_args(argv)
@@ -60,7 +62,8 @@ def main(argv=None) -> int:
                            stabilize=not args.no_stabilize,
                            exposure=not args.no_exposure,
                            slowmo_ceiling=args.slowmo_ceiling,
-                           final_quality=not args.preview)
+                           final_quality=not args.preview,
+                           outro=args.outro)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

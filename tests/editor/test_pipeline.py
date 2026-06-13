@@ -103,7 +103,7 @@ def test_director_copies_motion_and_exposure_from_scout(monkeypatch, tmp_path):
     sc = ClipScout(
         "FX6_a.mov", score=20, best_in=1.0, best_out=3.0, duration=8.0, fps=60.0,
         subject_x=0.5,
-        exp_mean=60.0, exp_highlight_clip=0.0,
+        exp_mean=60.0, exp_midtone=60.0, exp_highlight_clip=0.0,
         motion_type="pan", motion_in=1.0, motion_out=5.0, motion_strength=7.0,
     )
     scouts = {"FX6_a.mov": sc}

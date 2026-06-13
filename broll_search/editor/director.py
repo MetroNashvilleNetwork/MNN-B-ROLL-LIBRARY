@@ -28,6 +28,7 @@ class DirectorCandidate:
     subject_x: float = 0.5
     # 7a — measured exposure fields (pipeline copies from ClipScout)
     exp_mean: float = 112.0
+    exp_midtone: float = 112.0
     exp_highlight_clip: float = 0.0
     # 7a — measured motion fields (pipeline copies from ClipScout)
     motion_type: str = "static"
@@ -80,7 +81,7 @@ def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
                           music: MusicInfo, target_total: float = 28.0) -> str:
     """7d — cinematic direction: premium + SMOOTH, one-motion, mostly-slowmo."""
     n_shots = max(6, round(target_total / 1.2))
-    slowmo_cap = math.ceil(n_shots * 0.7)
+    slowmo_cap = math.ceil(n_shots * 0.85)
     bpm = round(music.tempo)
     beat = round(60.0 / bpm, 2) if bpm else 0
     return f"""You are a senior video editor cutting a {target_total:.0f}-second vertical (9:16) social recap on the theme "{theme}" in the house style of Metro Nashville Network. Cut a premium, cinematic, SMOOTH edit. Cuts may be fast but NOTHING may look shaky or chaotic — every shot must read as one clean, intentional camera move.
@@ -95,7 +96,7 @@ STRUCTURE / ARC — follow this exactly:
 2. First HUMAN moment — a candid reaction (~1.3s).
 3. ESTABLISHING WIDE (~0.9s) to set the scene.
 4. BUILD and ACCELERATE — alternate people, reactions, details, action; shots get progressively SHORTER toward the end (start ~2s, finish ~0.4–0.6s rapid-fire). Anticipate each beat: land the cut 1–2 frames BEFORE it.
-5. CLOSE on a longer WIDE group/hero hold (~2.5–3s) that breathes.
+5. CLOSE on a slow-mo hero hold (a WIDE group or signature shot): pick a SHORT ~1.0–1.3s source span that plays ~2.5–3s in slow-motion so it breathes.
 
 ONE MOTION PER CLIP (selection rule):
 Each clip is tagged with a detected `motion`. When a clip has a real move (pan/tilt/push_in/pull_back), set your `in`/`out` INSIDE its [motion_in–motion_out] span so the cut contains that single clean move. For `static` clips pick the sharpest moment; a gentle push-in is added automatically. NEVER select a span that contains two different moves. NEVER pick a `complex` clip for slow-mo unless you also set stabilize=true.
@@ -103,8 +104,8 @@ Each clip is tagged with a detected `motion`. When a clip has a real move (pan/t
 AGGRESSIVE STABILIZE:
 Set stabilize=true for ANY handheld or `complex` clip — err strongly toward stabilizing. The viewer's #1 complaint is shaky footage; smoothness beats everything.
 
-MAINLY SLOW-MO:
-This edit should FEEL slow and cinematic — the MAJORITY of its runtime is slow-motion. Set retime=slowmo on MOST clips that contain movement (a camera move pan/tilt/push_in/pull_back, OR clear subject/action motion), and on every emotional/water/fabric/reveal/reaction beat. Slow-mo plays ~2.5× slower, so give each slow-mo clip a SHORT (~0.8–1.4s) source span so the stretched result stays on pace. Aim for ROUGHLY 60–70% of total runtime in slow-mo (up to about {slowmo_cap} of the shots). Leave the REST `normal` for contrast — especially the rapid-fire shots near the end and any moment where real-time energy matters; do not make it ALL slow-mo. Do NOT slow-mo a `complex` clip unless you also set stabilize=true.
+MAINLY SLOW-MO (this is the dominant feel):
+The LARGE MAJORITY of this edit is slow-motion. Set retime=slowmo on almost every clip that has any movement (a camera move pan/tilt/push_in/pull_back, OR subject/action motion), and on every emotional/water/fabric/reveal/reaction beat. Slow-mo plays ~2.5× slower, so give each slow-mo clip a SHORT (~0.8–1.4s) source span so the stretched result stays on pace. Aim for ROUGHLY 70–80% of total runtime in slow-mo (up to about {slowmo_cap} of the shots). The CLOSER is slow-mo (a hero hold). Leave only a FEW shots `normal` — the rapid-fire accelerating beats just before the closer — for contrast; do not make it ALL slow-mo. Do NOT slow-mo a `complex` clip unless you also set stabilize=true.
 
 EXPOSURE:
 Prefer well-exposed clips. You may keep a slightly over/under shot — exposure is corrected automatically. Just avoid badly clipped footage.
@@ -114,7 +115,7 @@ PACING:
 - VARY shot lengths; never more than 3 same-length shots in a row.
 - Aim for about {n_shots} shots total, following the slow→fast acceleration arc above.
 
-RULES: ALL HARD CUTS (no dissolves). Prioritize emotional + story moments. Use only strong clips — skip soft, over/under-exposed, or repetitive ones.
+RULES: ALL HARD CUTS (no dissolves). Prioritize emotional + story moments. Use only strong clips — skip soft, over/under-exposed, or repetitive ones. Use each source clip AT MOST ONCE (never reuse a clip unless you have fewer clips than shots), never place the same source in adjacent shots, and reserve a distinct strong clip for the closer. Avoid two near-identical framings of the same subject back-to-back.
 
 Output ONLY JSON matching the schema."""
 
@@ -132,7 +133,7 @@ def _push_in_for_duration(dur: float) -> float:
 def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
                        theme: str, music: MusicInfo, default_profile: str = "rec709",
                        target_total: float = 28.0,
-                       slowmo_ceiling: float = 0.70,
+                       slowmo_ceiling: float = 0.85,
                        shot_to_shot_easing: bool = True) -> EDL:
     """Build an EDL and apply the deterministic post-pass (§7e)."""
     by_index = {c.index: c for c in candidates}
@@ -229,31 +230,39 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
         if clip.retime == "slowmo" and cand.motion_type == "complex" and not clip.stabilize:
             clip.retime = "normal"
 
-        # Step 5 — exposure (deterministic from measurement)
-        err = analysis.TARGET_MID - cand.exp_mean
-        adjust = max(-0.45, min(0.45, err / 140.0))
+        # Step 5 — exposure from the robust MIDTONE (median): a bright screen or
+        # window in a dark scene no longer fools the corrector into darkening it.
+        err = analysis.TARGET_MID - cand.exp_midtone
+        adjust = max(-0.22, min(0.45, err / 140.0))   # lift freely, darken cautiously
         clip.exposure_adjust = round(adjust, 3)
         clip.highlight_clip = cand.exp_highlight_clip
 
+    # Step 4a2 — the closer lands in slow-mo (a hero hold) when the source allows
+    for clip in clips:
+        if clip.role == "closer" and clip.source_fps >= 48.0 \
+                and not (clip.motion_type == "complex" and not clip.stabilize):
+            clip.retime = "slowmo"
+
     # Step 4b — slow-mo cap: downgrade excess slowmo past the ceiling of target_total
+    # (the closer is protected — it anchors the cinematic landing)
     total_slowmo_s = 0.0
     cap_s = target_total * slowmo_ceiling
     for clip in clips:
         if clip.retime == "slowmo":
             on_screen = clip.duration * 2.5   # setpts=2.5*PTS
-            if total_slowmo_s + on_screen > cap_s:
+            if clip.role != "closer" and total_slowmo_s + on_screen > cap_s:
                 clip.retime = "normal"
             else:
                 total_slowmo_s += on_screen
 
-    # Step 6 — shot-to-shot easing (exposure doc §c)
+    # Step 6 — shot-to-shot easing on the MIDTONE (exposure doc §c)
     if shot_to_shot_easing and clip_cands:
-        exp_means = [c.exp_mean for c in clip_cands]
-        timeline_mean = statistics.median(exp_means)
+        mids = [c.exp_midtone for c in clip_cands]
+        timeline_mid = statistics.median(mids)
         for clip, cand in zip(clips, clip_cands):
-            matched_target = analysis.TARGET_MID * 0.65 + timeline_mean * 0.35
-            err2 = matched_target - cand.exp_mean
-            adjust2 = max(-0.45, min(0.45, err2 / 140.0))
+            matched_target = analysis.TARGET_MID * 0.65 + timeline_mid * 0.35
+            err2 = matched_target - cand.exp_midtone
+            adjust2 = max(-0.22, min(0.45, err2 / 140.0))
             clip.exposure_adjust = round(adjust2, 3)
 
     return EDL(theme=theme, music=music.path, clips=clips, duration_target_s=target_total)
@@ -261,7 +270,7 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
 
 def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
                               target_total: float = 28.0,
-                              slowmo_ceiling: float = 0.70,
+                              slowmo_ceiling: float = 0.85,
                               shot_to_shot_easing: bool = True) -> None:
     """Apply the same deterministic post-pass as parse_director_edl (§7e / §8b).
 
@@ -331,31 +340,37 @@ def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
         if clip.retime == "normal" and sc.motion_type in REAL_MOVES:
             clip.retime = "slowmo"
 
-        # Step 5 — exposure
-        err = analysis.TARGET_MID - sc.exp_mean
-        adjust = max(-0.45, min(0.45, err / 140.0))
+        # Step 5 — exposure from the robust MIDTONE (median)
+        err = analysis.TARGET_MID - sc.exp_midtone
+        adjust = max(-0.22, min(0.45, err / 140.0))
         clip.exposure_adjust = round(adjust, 3)
         clip.highlight_clip = sc.exp_highlight_clip
 
-    # Step 4b — slow-mo cap
+    # Step 4a2 — closer lands in slow-mo (hero hold) when source fps allows
+    for clip in edl.clips:
+        if clip.role == "closer" and clip.source_fps >= 48.0 \
+                and not (clip.motion_type == "complex" and not clip.stabilize):
+            clip.retime = "slowmo"
+
+    # Step 4b — slow-mo cap (closer protected)
     total_slowmo_s = 0.0
     cap_s = target_total * slowmo_ceiling
     for clip in edl.clips:
         if clip.retime == "slowmo":
             on_screen = clip.duration * 2.5
-            if total_slowmo_s + on_screen > cap_s:
+            if clip.role != "closer" and total_slowmo_s + on_screen > cap_s:
                 clip.retime = "normal"
             else:
                 total_slowmo_s += on_screen
 
-    # Step 6 — shot-to-shot easing
+    # Step 6 — shot-to-shot easing on the MIDTONE
     if shot_to_shot_easing and paired:
-        exp_means = [sc.exp_mean for _, sc in paired]
-        timeline_mean = statistics.median(exp_means)
+        mids = [sc.exp_midtone for _, sc in paired]
+        timeline_mid = statistics.median(mids)
         for clip, sc in paired:
-            matched_target = analysis.TARGET_MID * 0.65 + timeline_mean * 0.35
-            err2 = matched_target - sc.exp_mean
-            adjust2 = max(-0.45, min(0.45, err2 / 140.0))
+            matched_target = analysis.TARGET_MID * 0.65 + timeline_mid * 0.35
+            err2 = matched_target - sc.exp_midtone
+            adjust2 = max(-0.22, min(0.45, err2 / 140.0))
             clip.exposure_adjust = round(adjust2, 3)
 
 
@@ -369,7 +384,7 @@ class DirectorClient:
 def compose_edit(theme: str, candidates: Sequence[DirectorCandidate], music: MusicInfo,
                  client: DirectorClient, default_profile: str = "rec709",
                  target_total: float = 28.0,
-                 slowmo_ceiling: float = 0.70) -> EDL:
+                 slowmo_ceiling: float = 0.85) -> EDL:
     prompt = build_director_prompt(theme, candidates, music, target_total)
     proxy_paths = [c.proxy_path for c in candidates]
     data = client.generate_edl(prompt, proxy_paths)

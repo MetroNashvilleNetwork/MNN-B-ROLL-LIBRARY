@@ -75,6 +75,7 @@ def render_format(
     brand_enabled: bool = False,
     font_path: str = "",
     final_quality: bool = True,
+    outro: str = "card",
 ) -> Path:
     if not edl.clips:
         raise ValueError("render_format: EDL has no clips")
@@ -139,12 +140,12 @@ def render_format(
                  cwd=run_cwd, timeout=600)
             seg_files.append(seg)
 
-        if brand_enabled and card_font and edl.clips:
-            outro = make_card(tmp / "card_zz_outro.mp4", width, height, edl.fps,
-                              title=_brand.WORDMARK, subtitle="", logo_path=str(_brand.LOGO_PATH),
-                              font_path=card_font, ffmpeg_path=ffmpeg_path, cwd=run_cwd,
-                              tmpdir=tmp, duration=1.6)
-            seg_files.append(outro)
+        if outro == "card" and brand_enabled and card_font and edl.clips:
+            outro_seg = make_card(tmp / "card_zz_outro.mp4", width, height, edl.fps,
+                                  title=_brand.WORDMARK, subtitle="", logo_path=str(_brand.LOGO_PATH),
+                                  font_path=card_font, ffmpeg_path=ffmpeg_path, cwd=run_cwd,
+                                  tmpdir=tmp, duration=1.6)
+            seg_files.append(outro_seg)
 
         # 2) concat intermediates (identical params -> stream copy)
         listfile = tmp / "concat.txt"
@@ -161,11 +162,30 @@ def render_format(
              cwd=run_cwd, timeout=120)
 
         # 3) mux loudness-normalized music; end at the shorter of video/music
-        _run([ffmpeg_path, "-y", "-i", str(silent), "-i", edl.music,
-              "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-              "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k",
-              "-shortest", "-movflags", "+faststart", str(out_path)],
-             cwd=run_cwd, timeout=600)
+        if outro == "fade":
+            # Fade picture to black + fade music out over the final ~0.8s.
+            # Video length = sum of on-screen clip durations (+ opening title card).
+            vdur = sum(c.duration * (2.5 if c.retime == "slowmo" else 1.0)
+                       for c in edl.clips)
+            if brand_enabled and card_font:
+                vdur += 1.8   # opening title card
+            fade_d = 0.8
+            fade_st = max(0.0, vdur - fade_d)
+            _run([ffmpeg_path, "-y", "-i", str(silent), "-i", edl.music,
+                  "-map", "0:v:0", "-map", "1:a:0",
+                  "-vf", f"fade=t=out:st={fade_st:.3f}:d={fade_d}",
+                  "-af", ("loudnorm=I=-14:TP=-1.5:LRA=11,"
+                          f"afade=t=out:st={fade_st:.3f}:d={fade_d}"),
+                  "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-b:a", "192k",
+                  "-shortest", "-movflags", "+faststart", str(out_path)],
+                 cwd=run_cwd, timeout=600)
+        else:
+            _run([ffmpeg_path, "-y", "-i", str(silent), "-i", edl.music,
+                  "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                  "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-c:a", "aac", "-b:a", "192k",
+                  "-shortest", "-movflags", "+faststart", str(out_path)],
+                 cwd=run_cwd, timeout=600)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

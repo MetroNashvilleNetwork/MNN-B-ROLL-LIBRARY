@@ -26,12 +26,14 @@ def _music():
 
 
 def _cand_static(index=0, exp_mean=112.0, exp_highlight_clip=0.0,
-                 duration=5.0, fps=60.0, score=20):
+                 duration=5.0, fps=60.0, score=20, exp_midtone=None):
     """A static-motion candidate with configurable exposure."""
+    if exp_midtone is None:
+        exp_midtone = exp_mean
     return DirectorCandidate(
         index=index, path=f"clip{index}.mov", proxy_path=f"p{index}.mp4",
         duration=duration, fps=fps, score=score, subject_x=0.5,
-        exp_mean=exp_mean, exp_highlight_clip=exp_highlight_clip,
+        exp_mean=exp_mean, exp_midtone=exp_midtone, exp_highlight_clip=exp_highlight_clip,
         motion_type="static", motion_in=0.0, motion_out=duration, motion_strength=0.0,
     )
 
@@ -221,9 +223,9 @@ def test_prompt_slowmo_cap():
     """The prompt should include a per-count slow-mo cap derived from n_shots."""
     import math
     p = build_director_prompt("Parks", _cands(), _music(), 24)
-    # n_shots = max(6, round(24/1.2)) = 20, slowmo_cap = ceil(20*0.7) = 14
+    # n_shots = max(6, round(24/1.2)) = 20, slowmo_cap = ceil(20*0.85) = 17
     n_shots = max(6, round(24 / 1.2))
-    slowmo_cap = math.ceil(n_shots * 0.7)
+    slowmo_cap = math.ceil(n_shots * 0.85)
     assert str(slowmo_cap) in p    # the cap number appears in the prompt
 
 
@@ -377,7 +379,7 @@ def test_slowmo_cap_downgrades_excess():
     data = {"timeline": [
         {"clip_index": 0, "in": 0.0, "out": 4.0, "role": "hook", "retime": "slowmo"},
         {"clip_index": 1, "in": 0.0, "out": 4.0, "role": "body", "retime": "slowmo"},
-        {"clip_index": 2, "in": 0.0, "out": 4.0, "role": "closer", "retime": "slowmo"},
+        {"clip_index": 2, "in": 0.0, "out": 4.0, "role": "body", "retime": "slowmo"},
     ]}
     # target_total=28, ceiling=0.40 => cap=11.2s; first clip=10s on-screen, second=10s (>cap)
     edl = parse_director_edl(data, cands, "t", _music(), target_total=28.0,
@@ -388,11 +390,25 @@ def test_slowmo_cap_downgrades_excess():
     assert retimes[2] == "normal"     # also over cap
 
 
+def test_closer_forced_slowmo_and_protected_from_cap():
+    """The closer is forced to slow-mo (hero hold) and exempt from the cap."""
+    cands = [_cand_static(index=0, duration=5.0), _cand_static(index=1, duration=5.0)]
+    data = {"timeline": [
+        {"clip_index": 0, "in": 0.0, "out": 4.0, "role": "body", "retime": "slowmo"},
+        {"clip_index": 1, "in": 0.0, "out": 4.0, "role": "closer", "retime": "normal"},
+    ]}
+    # body alone (10s on-screen) blows a tight cap; the closer must still survive
+    edl = parse_director_edl(data, cands, "t", _music(), target_total=8.0,
+                             slowmo_ceiling=0.5, shot_to_shot_easing=False)
+    assert edl.clips[-1].role == "closer"
+    assert edl.clips[-1].retime == "slowmo"   # forced from normal + protected from cap
+
+
 # --- Step 5: exposure adjust ---
 
 def test_dark_candidate_positive_exposure_adjust():
-    """exp_mean=56 (dark) => err=112-56=56, adjust=56/140=0.40."""
-    cand = _cand_static(index=0, exp_mean=56.0, duration=3.0)
+    """midtone=56 (dark) => err=112-56=56, adjust=56/140=0.40."""
+    cand = _cand_static(index=0, exp_midtone=56.0, duration=3.0)
     data = _simple_edl_data(index=0, in_p=0.0, out_p=2.5)
     edl = parse_director_edl(data, [cand], "t", _music(), shot_to_shot_easing=False)
     clip = edl.clips[0]
@@ -400,12 +416,22 @@ def test_dark_candidate_positive_exposure_adjust():
 
 
 def test_hot_candidate_negative_exposure_adjust():
-    """exp_mean=150 (bright) => err=112-150=-38, adjust=-38/140≈-0.271."""
-    cand = _cand_static(index=0, exp_mean=150.0, duration=3.0)
+    """midtone=150 (bright) => raw -0.271, clamped to the -0.22 darken floor."""
+    cand = _cand_static(index=0, exp_midtone=150.0, duration=3.0)
     data = _simple_edl_data(index=0, in_p=0.0, out_p=2.5)
     edl = parse_director_edl(data, [cand], "t", _music(), shot_to_shot_easing=False)
     clip = edl.clips[0]
-    assert clip.exposure_adjust == pytest.approx(-0.271, abs=0.01)
+    assert clip.exposure_adjust == pytest.approx(-0.22, abs=0.01)
+
+
+def test_bright_mean_but_dark_midtone_is_lifted_not_darkened():
+    """Regression: a dark scene with a bright element (screen/window/stage light)
+    has a HIGH mean but a LOW midtone. Correction keys off the midtone, so it must
+    LIFT (positive), not darken — the v2 bug where dim shots got pushed darker."""
+    cand = _cand_static(index=0, exp_mean=170.0, exp_midtone=60.0, duration=3.0)
+    data = _simple_edl_data(index=0, in_p=0.0, out_p=2.5)
+    edl = parse_director_edl(data, [cand], "t", _music(), shot_to_shot_easing=False)
+    assert edl.clips[0].exposure_adjust > 0.2
 
 
 def test_neutral_candidate_small_exposure_adjust():

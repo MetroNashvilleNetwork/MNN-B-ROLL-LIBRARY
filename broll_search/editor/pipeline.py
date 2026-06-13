@@ -42,7 +42,7 @@ def find_media(folder: Path, exts) -> List[Path]:
 def build_edl_scored(clip_paths: Sequence[str], music_path: str, theme: str,
                      target_total: float, default_profile: str,
                      cache: dict, window: float = 1.5,
-                     slowmo_ceiling: float = 0.70) -> EDL:
+                     slowmo_ceiling: float = 0.85) -> EDL:
     """Quality-ranked EDL + apply the same cinematic post-pass as the director path."""
     scouts = [scout_clip_cached(p, cache, window=window,
                                 profile=profile_for(p, default_profile))
@@ -61,7 +61,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
                        target_total: float, default_profile: str,
                        cache: dict, proxy_dir, ffmpeg_path: str, client,
                        max_candidates: int = 40,
-                       slowmo_ceiling: float = 0.70) -> EDL:
+                       slowmo_ceiling: float = 0.85) -> EDL:
     """Director-driven EDL: rank clips, scout them (with correct profile), pass to Gemini."""
     music = analyze_music(music_path)
     ranked = []
@@ -81,6 +81,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
             index=i, path=p, proxy_path=str(proxy), duration=sc.duration,
             fps=sc.fps, score=sc.score, subject_x=sc.subject_x,
             exp_mean=sc.exp_mean,
+            exp_midtone=sc.exp_midtone,
             exp_highlight_clip=sc.exp_highlight_clip,
             motion_type=sc.motion_type,
             motion_in=sc.motion_in,
@@ -110,8 +111,9 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  look_strength: float = 0.4,
                  stabilize: bool = True,
                  exposure: bool = True,
-                 slowmo_ceiling: float = 0.70,
-                 final_quality: bool = True):
+                 slowmo_ceiling: float = 0.85,
+                 final_quality: bool = True,
+                 outro: str = "fade"):
     """Run the full pipeline: scout → EDL → render two formats.
 
     Parameters
@@ -123,7 +125,7 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
         When False, zero ``clip.exposure_adjust`` and ``clip.highlight_clip``
         on every clip (escape hatch; normally ON).
     slowmo_ceiling:
-        Fraction of ``target_total`` that may be slow-mo on-screen (default 0.70).
+        Fraction of ``target_total`` that may be slow-mo on-screen (default 0.85).
         Threaded into the EDL builders so the post-pass cap is consistent.
     """
     ffmpeg = _resolve_tool(ffmpeg_path, "ffmpeg")
@@ -187,11 +189,11 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
     vertical = render_format(edl, out / "vertical.mp4", 1080, 1920,
                              lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
                              brand_enabled=brand, font_path=font_path,
-                             look_strength=look_strength, final_quality=final_quality)
+                             look_strength=look_strength, final_quality=final_quality, outro=outro)
     landscape = render_format(edl, out / "landscape.mp4", 1920, 1080,
                               lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
                               brand_enabled=brand, font_path=font_path,
-                              look_strength=look_strength, final_quality=final_quality)
+                              look_strength=look_strength, final_quality=final_quality, outro=outro)
     (out / "edl.json").write_text(_edl_to_json(edl), encoding="utf-8")
     return RenderResult(edl=edl, vertical=vertical, landscape=landscape, out_dir=out)
 
