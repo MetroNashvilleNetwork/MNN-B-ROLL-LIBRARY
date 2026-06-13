@@ -229,6 +229,13 @@ def test_prompt_slowmo_cap():
     assert str(slowmo_cap) in p    # the cap number appears in the prompt
 
 
+def test_prompt_directs_best_moment_per_clip():
+    """Director is told to use each clip's strongest moment + given the scout hint."""
+    p = build_director_prompt("Parks", _cands(), _music(), 24)
+    assert "best=[" in p              # scout sharpest-window hint surfaced in manifest
+    assert "STRONGEST moment" in p    # explicit best-moment directive
+
+
 def test_prompt_smooth_and_premium():
     p = build_director_prompt("Parks", _cands(), _music(), 24).lower()
     assert "smooth" in p

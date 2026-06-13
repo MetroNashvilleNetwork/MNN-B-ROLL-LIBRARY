@@ -80,6 +80,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
         candidates.append(DirectorCandidate(
             index=i, path=p, proxy_path=str(proxy), duration=sc.duration,
             fps=sc.fps, score=sc.score, subject_x=sc.subject_x,
+            best_in=sc.best_in, best_out=sc.best_out,
             exp_mean=sc.exp_mean,
             exp_midtone=sc.exp_midtone,
             exp_highlight_clip=sc.exp_highlight_clip,

@@ -26,6 +26,9 @@ class DirectorCandidate:
     fps: float
     score: float
     subject_x: float = 0.5
+    # scout's sharpest-quality window — the "best moment" hint for the director
+    best_in: float = 0.0
+    best_out: float = 0.0
     # 7a — measured exposure fields (pipeline copies from ClipScout)
     exp_mean: float = 112.0
     exp_midtone: float = 112.0
@@ -73,7 +76,7 @@ def _candidate_manifest(candidates: Sequence[DirectorCandidate]) -> str:
             f"Clip {c.index}: file={os.path.basename(c.path)} duration={c.duration:.1f}s "
             f"fps={c.fps:.0f} quality={c.score:.0f} subject_x={c.subject_x:.2f} "
             f"motion={c.motion_type}[{c.motion_in:.1f}-{c.motion_out:.1f}] "
-            f"move={c.motion_strength:.0f}")
+            f"move={c.motion_strength:.0f} best=[{c.best_in:.1f}-{c.best_out:.1f}]")
     return "\n".join(lines)
 
 
@@ -121,6 +124,9 @@ STRUCTURE / ARC — follow this exactly:
 
 ONE MOTION PER CLIP (selection rule):
 Each clip is tagged with a detected `motion`. When a clip has a real move (pan/tilt/push_in/pull_back), set your `in`/`out` INSIDE its [motion_in–motion_out] span so the cut contains that single clean move. For `static` clips pick the sharpest moment; a gentle push-in is added automatically. NEVER select a span that contains two different moves. NEVER pick a `complex` clip for slow-mo unless you also set stabilize=true.
+
+BEST MOMENT PER CLIP:
+Watch every clip and set its in/out tightly around the SINGLE STRONGEST moment — the peak of the action, the best expression or reaction, the cleanest and most in-focus framing, or the emotional high point. Each candidate lists best=[a-b], the algorithmically sharpest window — treat it as a strong hint and confirm with your eyes. NEVER fill time with a clip's dead, soft, blurry, or transitional section; if a clip's only great beat is 0.6s long, use just that beat.
 
 AGGRESSIVE STABILIZE:
 Set stabilize=true for ANY handheld or `complex` clip — err strongly toward stabilizing. The viewer's #1 complaint is shaky footage; smoothness beats everything.
