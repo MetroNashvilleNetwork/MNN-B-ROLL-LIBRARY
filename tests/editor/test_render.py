@@ -144,3 +144,27 @@ def test_render_with_branding_adds_cards(tmp_path):
     assert out.exists()
     # clips total ~2.5s; title+outro cards add ~3s -> well over 4s
     assert _ffprobe_duration(out) > 4.0
+
+
+from broll_search.editor.render import stabilization_mode
+
+
+def test_stabilization_mode_detects_a_filter():
+    mode = stabilization_mode(ffmpeg)          # this build has at least deshake
+    assert mode in ("vidstab", "deshake")
+
+
+def test_render_stabilized_clip_succeeds(tmp_path):
+    src = tmp_path / "shaky.mp4"
+    # a moving test source so a stabilizer has something to do
+    subprocess.run([ffmpeg, "-y", "-f", "lavfi",
+                    "-i", "testsrc2=size=1280x720:rate=30", "-t", "2",
+                    "-vf", "crop=in_w/1.2:in_h/1.2:x=10*sin(n/3):y=10*cos(n/3)",
+                    "-pix_fmt", "yuv420p", str(src)], check=True, capture_output=True)
+    music = tmp_path / "m.wav"
+    _make_tone(music, 10)
+    edl = EDL(theme="t", music=str(music), clips=[
+        Clip(1, str(src), 0.0, 1.5, "rec709", "hook", stabilize=True)])
+    out = tmp_path / "v.mp4"
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+    assert out.exists() and out.stat().st_size > 0       # stabilized clip rendered cleanly

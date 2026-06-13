@@ -15,8 +15,31 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import PROJECT_ROOT
+from .branding import escape_filter_path
 from .edl import EDL
 from .filters import clip_video_chain
+
+
+_STAB_MODE_CACHE: dict = {}
+
+
+def stabilization_mode(ffmpeg_path: str = "ffmpeg") -> str:
+    """Return the best stabilizer this ffmpeg build supports: 'vidstab', 'deshake', or ''."""
+    if ffmpeg_path in _STAB_MODE_CACHE:
+        return _STAB_MODE_CACHE[ffmpeg_path]
+    mode = ""
+    try:
+        proc = subprocess.run([ffmpeg_path, "-hide_banner", "-filters"],
+                              capture_output=True, text=True, timeout=30)
+        out = proc.stdout or ""
+        if "vidstabtransform" in out and "vidstabdetect" in out:
+            mode = "vidstab"
+        elif "deshake" in out:
+            mode = "deshake"
+    except (OSError, subprocess.SubprocessError):
+        mode = ""
+    _STAB_MODE_CACHE[ffmpeg_path] = mode
+    return mode
 
 
 def _run(cmd: list[str], cwd=None, timeout=None) -> None:
@@ -62,6 +85,8 @@ def render_format(
     base.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix=f"render_{width}x{height}_", dir=str(base)))
 
+    stab_mode = stabilization_mode(ffmpeg_path)
+
     try:
         # 1) per-clip normalized intermediates
         seg_files = []
@@ -78,9 +103,21 @@ def render_format(
                 seg_files.append(title)
         for clip in edl.clips:
             seg = tmp / f"seg_{clip.id:03d}.mp4"
-            vf = clip_video_chain(clip.color_profile, lut_dir, width, height,
-                                  edl.fps, look_strength, subject_x=clip.subject_x,
-                                  retime=clip.retime, source_fps=clip.source_fps)
+            stab = ""
+            if getattr(clip, "stabilize", False) and stab_mode:
+                if stab_mode == "vidstab":
+                    trf = tmp / f"stab_{clip.id:03d}.trf"
+                    _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-t", str(clip.duration),
+                          "-i", clip.source, "-vf",
+                          f"vidstabdetect=shakiness=8:accuracy=15:result={escape_filter_path(str(trf))}",
+                          "-f", "null", "-"], cwd=run_cwd, timeout=600)
+                    stab = (f"vidstabtransform=input={escape_filter_path(str(trf))}:smoothing=30:"
+                            f"crop=black:zoom=0,unsharp=5:5:0.6:3:3:0.4,")
+                elif stab_mode == "deshake":
+                    stab = "deshake,"
+            vf = stab + clip_video_chain(clip.color_profile, lut_dir, width, height,
+                                         edl.fps, look_strength, subject_x=clip.subject_x,
+                                         retime=clip.retime, source_fps=clip.source_fps)
             _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-t", str(clip.duration),
                   "-i", clip.source, "-an", "-vf", vf, "-r", edl.fps,
                   "-c:v", "libx264", "-crf", "18", "-preset", "medium",

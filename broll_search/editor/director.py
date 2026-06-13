@@ -74,7 +74,7 @@ WATCH the clips and compose the edit. Output a `timeline`: an ordered list of cu
 - in / out: the exact best in- and out-point IN SECONDS within that clip (pick the strongest moment you SEE)
 - role: "hook" for the very first (most arresting) shot, "closer" for the last, "body" otherwise
 - subject_x: 0.0=left .. 1.0=right, where the main subject sits, so vertical cropping keeps them framed
-- stabilize: true ONLY if the shot is visibly shaky
+- stabilize: true for ANY shot with visible handheld movement, bounce, or shake (most non-tripod / gimbal-less footage benefits) — be generous; smoothing a slightly shaky shot looks far more professional than leaving it shaky. Use false only for clearly locked-off / tripod shots.
 - retime: "slowmo" to play the shot as smooth slow motion (great for high-fps clips with flowing motion — water, crowds, movement); else "normal". NOTE: slowmo plays the clip roughly (its fps / 24) times slower, so a 1s in/out span becomes ~2.5s on screen for 60fps footage — pick a SHORTER in/out span for slowmo shots.
 - reason: one short phrase on why you chose this shot/moment
 
