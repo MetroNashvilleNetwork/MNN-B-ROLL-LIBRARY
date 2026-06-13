@@ -91,3 +91,11 @@ def test_prompt_mentions_slowmo():
 def test_schema_has_retime():
     props = EDL_RESPONSE_SCHEMA["properties"]["timeline"]["items"]["properties"]
     assert "retime" in props
+
+
+def test_prompt_pushes_fast_pacing():
+    p = build_director_prompt("Parks", _cands(), _music(), 24).lower()
+    assert "fast" in p or "punchy" in p
+    assert "1.0" in p or "1.1" in p or "1.4" in p          # ~1s shot guidance
+    # asks for many shots, not a handful (24s / ~1.2s ~= 20)
+    assert "20 shots" in p or "shots total" in p

@@ -62,6 +62,7 @@ def _candidate_manifest(candidates: Sequence[DirectorCandidate]) -> str:
 
 def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
                           music: MusicInfo, target_total: float = 28.0) -> str:
+    n_shots = max(6, round(target_total / 1.2))
     return f"""You are a senior video editor cutting a {target_total:.0f}-second vertical social montage on the theme "{theme}".
 
 You are shown {len(candidates)} b-roll proxy clips (low-res previews of the real footage), in the same order as this manifest:
@@ -80,7 +81,8 @@ WATCH the clips and compose the edit. Output a `timeline`: an ordered list of cu
 
 Craft rules (make it look human-made, NOT auto-generated):
 - Open on the single strongest, most arresting shot (the hook) in the first ~1.5s.
-- VARY shot lengths; never metronomic.
+- PACING — cut FAST and punchy. Most shots should be about 1.0-1.4 seconds. Mix in occasional quick accent cuts (0.3-0.6s) and ONE or two longer hero holds (3-5s) for rhythm. VARY shot lengths; never metronomic, and never leave shots long or languid.
+- Aim for roughly {n_shots} shots total to fill {target_total:.0f}s at this fast pace.
 - Sequence with variety: establishing -> medium -> detail; never two near-identical shots back to back.
 - Use only the best clips; skip soft or poorly-exposed ones.
 - Keep it tight to about {target_total:.0f} seconds total.
