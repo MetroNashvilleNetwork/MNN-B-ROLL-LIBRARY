@@ -71,3 +71,23 @@ def test_clip_video_chain_inserts_setpts_before_fps_when_slowmo():
                              retime="slowmo", source_fps=60.0)
     assert "setpts=" in chain
     assert chain.index("setpts=") < chain.index("fps=24000/1001")
+
+
+def test_clip_chain_full_strength_is_linear():
+    chain = clip_video_chain("sony_slog3", "luts", 1080, 1920, "24000/1001", look_strength=1.0)
+    assert "split" not in chain and "blend" not in chain
+    assert "sony_slog3.cube" in chain and "look_walkman.cube" in chain
+
+
+def test_clip_chain_partial_strength_blends_look():
+    chain = clip_video_chain("sony_slog3", "luts", 1080, 1920, "24000/1001", look_strength=0.4)
+    assert "split" in chain and "blend=all_expr=" in chain
+    assert "A*(1-0.4)+B*0.4" in chain
+    assert "sony_slog3.cube" in chain and "look_walkman.cube" in chain
+    assert chain.rstrip().endswith("format=yuv420p")
+
+
+def test_clip_chain_zero_strength_drops_look():
+    chain = clip_video_chain("sony_slog3", "luts", 1080, 1920, "24000/1001", look_strength=0.0)
+    assert "look_walkman.cube" not in chain        # no look at all
+    assert "sony_slog3.cube" in chain              # conversion still applied

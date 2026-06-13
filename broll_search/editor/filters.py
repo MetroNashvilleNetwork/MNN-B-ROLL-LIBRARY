@@ -79,14 +79,28 @@ def retime_filter(retime: str, source_fps: float, target_fps: str = "24000/1001"
 def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
                      fps: str, look_strength: float = 1.0, subject_x: float = 0.5,
                      retime: str = "normal", source_fps: float = 0.0) -> str:
-    """Full per-clip video filter chain: color -> reframe -> [setpts] -> conform -> 8-bit 420."""
-    parts = [
-        color_filter(profile, lut_dir, look_strength),
-        reframe_filter_anchored(width, height, subject_x),
-    ]
+    """Per-clip video chain: color (with dial-able look strength) -> reframe ->
+    retime -> conform -> 8-bit 4:2:0. When 0 < look_strength < 1 the house look
+    is blended over the converted image via split+blend (a small filtergraph)."""
+    tail_parts = [reframe_filter_anchored(width, height, subject_x)]
     rt = retime_filter(retime, source_fps, fps)
     if rt:
-        parts.append(rt)
-    parts.append(conform_filter(fps))
-    parts.append("format=yuv420p")
-    return ",".join(parts)
+        tail_parts.append(rt)
+    tail_parts += [conform_filter(fps), "format=yuv420p"]
+    tail = ",".join(tail_parts)
+
+    s = max(0.0, min(1.0, float(look_strength)))
+    convert = ""
+    cube = LUT_FILES.get(profile)
+    if cube:
+        convert = _lut3d(f"{lut_dir}/{cube}")
+    look = _lut3d(f"{lut_dir}/{LOOK_LUT}")
+
+    if s >= 0.999:
+        color = ",".join([p for p in [convert, look] if p])
+        return ",".join([p for p in [color, tail] if p])
+    if s <= 0.001:
+        return ",".join([p for p in [convert, tail] if p])
+    pre = (convert + ",") if convert else ""
+    return (f"{pre}split[b][k];[k]{look}[kk];"
+            f"[b][kk]blend=all_expr='A*(1-{s})+B*{s}'[g];[g]{tail}")

@@ -168,3 +168,15 @@ def test_render_stabilized_clip_succeeds(tmp_path):
     out = tmp_path / "v.mp4"
     render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path)
     assert out.exists() and out.stat().st_size > 0       # stabilized clip rendered cleanly
+
+
+def test_render_partial_look_strength_runs(tmp_path):
+    src = tmp_path / "FX6.mp4"
+    _make_clip(src, 2, 30)
+    music = tmp_path / "m.wav"
+    _make_tone(music, 10)
+    edl = EDL(theme="t", music=str(music), clips=[Clip(1, str(src), 0.0, 1.5, "sony_slog3", "hook")])
+    out = tmp_path / "v.mp4"
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg,
+                  tmpdir=tmp_path, look_strength=0.4)
+    assert out.exists() and out.stat().st_size > 0

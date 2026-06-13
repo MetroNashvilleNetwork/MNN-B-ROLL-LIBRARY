@@ -27,6 +27,8 @@ def main(argv=None) -> int:
     p.add_argument("--director", action="store_true",
                    help="Use the Gemini AI director (needs GEMINI_API_KEY); falls back to scoring if unavailable")
     p.add_argument("--no-brand", action="store_true", help="Skip the MNN title/outro cards")
+    p.add_argument("--look-strength", type=float, default=0.4,
+                   help="House-look intensity 0..1 (low = cleaner/more natural)")
     args = p.parse_args(argv)
 
     director_client = None
@@ -44,7 +46,8 @@ def main(argv=None) -> int:
                            ffprobe_path=args.ffprobe,
                            scored=not args.no_scored,
                            director_client=director_client,
-                           brand=not args.no_brand)
+                           brand=not args.no_brand,
+                           look_strength=args.look_strength)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
