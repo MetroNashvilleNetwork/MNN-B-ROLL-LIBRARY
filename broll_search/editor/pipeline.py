@@ -110,7 +110,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  look_strength: float = 0.4,
                  stabilize: bool = True,
                  exposure: bool = True,
-                 slowmo_ceiling: float = 0.40):
+                 slowmo_ceiling: float = 0.40,
+                 final_quality: bool = True):
     """Run the full pipeline: scout → EDL → render two formats.
 
     Parameters
@@ -186,11 +187,11 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
     vertical = render_format(edl, out / "vertical.mp4", 1080, 1920,
                              lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
                              brand_enabled=brand, font_path=font_path,
-                             look_strength=look_strength, final_quality=True)
+                             look_strength=look_strength, final_quality=final_quality)
     landscape = render_format(edl, out / "landscape.mp4", 1920, 1080,
                               lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
                               brand_enabled=brand, font_path=font_path,
-                              look_strength=look_strength, final_quality=True)
+                              look_strength=look_strength, final_quality=final_quality)
     (out / "edl.json").write_text(_edl_to_json(edl), encoding="utf-8")
     return RenderResult(edl=edl, vertical=vertical, landscape=landscape, out_dir=out)
 

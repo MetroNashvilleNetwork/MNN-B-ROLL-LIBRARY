@@ -36,6 +36,8 @@ def main(argv=None) -> int:
                    help="Disable per-clip exposure correction (overrides cinematic default of ON)")
     p.add_argument("--slowmo-ceiling", type=float, default=0.40,
                    help="Max fraction of total runtime that may be slow-mo (default 0.40)")
+    p.add_argument("--preview", action="store_true",
+                   help="Fast preview render (2160p prescale, for dev/Mac); omit for 4K-final quality")
     args = p.parse_args(argv)
 
     director_client = None
@@ -57,7 +59,8 @@ def main(argv=None) -> int:
                            look_strength=args.look_strength,
                            stabilize=not args.no_stabilize,
                            exposure=not args.no_exposure,
-                           slowmo_ceiling=args.slowmo_ceiling)
+                           slowmo_ceiling=args.slowmo_ceiling,
+                           final_quality=not args.preview)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
