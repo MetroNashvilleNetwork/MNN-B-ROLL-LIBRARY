@@ -34,8 +34,8 @@ def main(argv=None) -> int:
                    help="Disable per-clip stabilization (overrides cinematic default of ON)")
     p.add_argument("--no-exposure", action="store_true",
                    help="Disable per-clip exposure correction (overrides cinematic default of ON)")
-    p.add_argument("--slowmo-ceiling", type=float, default=0.40,
-                   help="Max fraction of total runtime that may be slow-mo (default 0.40)")
+    p.add_argument("--slowmo-ceiling", type=float, default=0.70,
+                   help="Max fraction of total runtime that may be slow-mo (default 0.70)")
     p.add_argument("--preview", action="store_true",
                    help="Fast preview render (2160p prescale, for dev/Mac); omit for 4K-final quality")
     args = p.parse_args(argv)

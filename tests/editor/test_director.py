@@ -151,8 +151,8 @@ def test_prompt_encodes_house_style():
     assert "detail" in p or "macro" in p          # open on detail/prop
     assert "accelerat" in p                        # accelerating pace
     assert "hard cut" in p                         # hard cuts
-    # new cinematic wording: slow-mo is "special" not "sparing/rare/at most one"
-    assert "special" in p or "30" in p or "40" in p   # slow-mo cap language
+    # cinematic wording: slow-mo is the dominant feel ("mainly", majority of runtime)
+    assert "mainly" in p or "60" in p or "70" in p   # slow-mo bias language
     assert "shots" in p                            # shot-count guidance
 
 
@@ -214,14 +214,17 @@ def test_prompt_aggressive_stabilize():
 
 def test_prompt_mostly_slowmo():
     p = build_director_prompt("Parks", _cands(), _music(), 24).lower()
-    assert "mostly" in p or "default" in p or "30" in p
+    assert "mainly" in p or "majority" in p or "60" in p
 
 
 def test_prompt_slowmo_cap():
     """The prompt should include a per-count slow-mo cap derived from n_shots."""
+    import math
     p = build_director_prompt("Parks", _cands(), _music(), 24)
-    # n_shots = max(6, round(24/1.2)) = 20, slowmo_cap = ceil(20*0.4) = 8
-    assert "8" in p    # the cap number appears in the prompt
+    # n_shots = max(6, round(24/1.2)) = 20, slowmo_cap = ceil(20*0.7) = 14
+    n_shots = max(6, round(24 / 1.2))
+    slowmo_cap = math.ceil(n_shots * 0.7)
+    assert str(slowmo_cap) in p    # the cap number appears in the prompt
 
 
 def test_prompt_smooth_and_premium():

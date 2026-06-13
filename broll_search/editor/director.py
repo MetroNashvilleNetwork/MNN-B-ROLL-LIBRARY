@@ -80,7 +80,7 @@ def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
                           music: MusicInfo, target_total: float = 28.0) -> str:
     """7d — cinematic direction: premium + SMOOTH, one-motion, mostly-slowmo."""
     n_shots = max(6, round(target_total / 1.2))
-    slowmo_cap = math.ceil(n_shots * 0.4)
+    slowmo_cap = math.ceil(n_shots * 0.7)
     bpm = round(music.tempo)
     beat = round(60.0 / bpm, 2) if bpm else 0
     return f"""You are a senior video editor cutting a {target_total:.0f}-second vertical (9:16) social recap on the theme "{theme}" in the house style of Metro Nashville Network. Cut a premium, cinematic, SMOOTH edit. Cuts may be fast but NOTHING may look shaky or chaotic — every shot must read as one clean, intentional camera move.
@@ -103,8 +103,8 @@ Each clip is tagged with a detected `motion`. When a clip has a real move (pan/t
 AGGRESSIVE STABILIZE:
 Set stabilize=true for ANY handheld or `complex` clip — err strongly toward stabilizing. The viewer's #1 complaint is shaky footage; smoothness beats everything.
 
-MOSTLY SLOW-MO:
-Default retime=slowmo on clips with a clean directional move (pan/tilt/push_in/pull_back) and on emotional/water/fabric/reveal/reaction beats. Slow-mo plays ~2.5× slower, so give those a SHORT (~1.0–1.6s) source span. Keep roughly 30–40% of total runtime at slow-mo — slow-mo must stay special; leave the rest `normal` for contrast. At most about {slowmo_cap} slow-mo shots. Keep most `static` shots at normal speed.
+MAINLY SLOW-MO:
+This edit should FEEL slow and cinematic — the MAJORITY of its runtime is slow-motion. Set retime=slowmo on MOST clips that contain movement (a camera move pan/tilt/push_in/pull_back, OR clear subject/action motion), and on every emotional/water/fabric/reveal/reaction beat. Slow-mo plays ~2.5× slower, so give each slow-mo clip a SHORT (~0.8–1.4s) source span so the stretched result stays on pace. Aim for ROUGHLY 60–70% of total runtime in slow-mo (up to about {slowmo_cap} of the shots). Leave the REST `normal` for contrast — especially the rapid-fire shots near the end and any moment where real-time energy matters; do not make it ALL slow-mo. Do NOT slow-mo a `complex` clip unless you also set stabilize=true.
 
 EXPOSURE:
 Prefer well-exposed clips. You may keep a slightly over/under shot — exposure is corrected automatically. Just avoid badly clipped footage.
@@ -132,7 +132,7 @@ def _push_in_for_duration(dur: float) -> float:
 def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
                        theme: str, music: MusicInfo, default_profile: str = "rec709",
                        target_total: float = 28.0,
-                       slowmo_ceiling: float = 0.40,
+                       slowmo_ceiling: float = 0.70,
                        shot_to_shot_easing: bool = True) -> EDL:
     """Build an EDL and apply the deterministic post-pass (§7e)."""
     by_index = {c.index: c for c in candidates}
@@ -235,7 +235,7 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
         clip.exposure_adjust = round(adjust, 3)
         clip.highlight_clip = cand.exp_highlight_clip
 
-    # Step 4b — slow-mo cap: downgrade excess slowmo past ~40% of target_total
+    # Step 4b — slow-mo cap: downgrade excess slowmo past the ceiling of target_total
     total_slowmo_s = 0.0
     cap_s = target_total * slowmo_ceiling
     for clip in clips:
@@ -261,7 +261,7 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
 
 def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
                               target_total: float = 28.0,
-                              slowmo_ceiling: float = 0.40,
+                              slowmo_ceiling: float = 0.70,
                               shot_to_shot_easing: bool = True) -> None:
     """Apply the same deterministic post-pass as parse_director_edl (§7e / §8b).
 
@@ -369,7 +369,7 @@ class DirectorClient:
 def compose_edit(theme: str, candidates: Sequence[DirectorCandidate], music: MusicInfo,
                  client: DirectorClient, default_profile: str = "rec709",
                  target_total: float = 28.0,
-                 slowmo_ceiling: float = 0.40) -> EDL:
+                 slowmo_ceiling: float = 0.70) -> EDL:
     prompt = build_director_prompt(theme, candidates, music, target_total)
     proxy_paths = [c.proxy_path for c in candidates]
     data = client.generate_edl(prompt, proxy_paths)

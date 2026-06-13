@@ -42,7 +42,7 @@ def find_media(folder: Path, exts) -> List[Path]:
 def build_edl_scored(clip_paths: Sequence[str], music_path: str, theme: str,
                      target_total: float, default_profile: str,
                      cache: dict, window: float = 1.5,
-                     slowmo_ceiling: float = 0.40) -> EDL:
+                     slowmo_ceiling: float = 0.70) -> EDL:
     """Quality-ranked EDL + apply the same cinematic post-pass as the director path."""
     scouts = [scout_clip_cached(p, cache, window=window,
                                 profile=profile_for(p, default_profile))
@@ -61,7 +61,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
                        target_total: float, default_profile: str,
                        cache: dict, proxy_dir, ffmpeg_path: str, client,
                        max_candidates: int = 40,
-                       slowmo_ceiling: float = 0.40) -> EDL:
+                       slowmo_ceiling: float = 0.70) -> EDL:
     """Director-driven EDL: rank clips, scout them (with correct profile), pass to Gemini."""
     music = analyze_music(music_path)
     ranked = []
@@ -110,7 +110,7 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  look_strength: float = 0.4,
                  stabilize: bool = True,
                  exposure: bool = True,
-                 slowmo_ceiling: float = 0.40,
+                 slowmo_ceiling: float = 0.70,
                  final_quality: bool = True):
     """Run the full pipeline: scout → EDL → render two formats.
 
@@ -123,7 +123,7 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
         When False, zero ``clip.exposure_adjust`` and ``clip.highlight_clip``
         on every clip (escape hatch; normally ON).
     slowmo_ceiling:
-        Fraction of ``target_total`` that may be slow-mo on-screen (default 0.40).
+        Fraction of ``target_total`` that may be slow-mo on-screen (default 0.70).
         Threaded into the EDL builders so the post-pass cap is consistent.
     """
     ffmpeg = _resolve_tool(ffmpeg_path, "ffmpeg")
