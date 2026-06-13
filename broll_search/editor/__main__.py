@@ -29,6 +29,13 @@ def main(argv=None) -> int:
     p.add_argument("--no-brand", action="store_true", help="Skip the MNN title/outro cards")
     p.add_argument("--look-strength", type=float, default=0.4,
                    help="House-look intensity 0..1 (low = cleaner/more natural)")
+    # 8d — cinematic escape-hatch flags (all default to the cinematic-ON behaviour)
+    p.add_argument("--no-stabilize", action="store_true",
+                   help="Disable per-clip stabilization (overrides cinematic default of ON)")
+    p.add_argument("--no-exposure", action="store_true",
+                   help="Disable per-clip exposure correction (overrides cinematic default of ON)")
+    p.add_argument("--slowmo-ceiling", type=float, default=0.40,
+                   help="Max fraction of total runtime that may be slow-mo (default 0.40)")
     args = p.parse_args(argv)
 
     director_client = None
@@ -47,7 +54,10 @@ def main(argv=None) -> int:
                            scored=not args.no_scored,
                            director_client=director_client,
                            brand=not args.no_brand,
-                           look_strength=args.look_strength)
+                           look_strength=args.look_strength,
+                           stabilize=not args.no_stabilize,
+                           exposure=not args.no_exposure,
+                           slowmo_ceiling=args.slowmo_ceiling)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

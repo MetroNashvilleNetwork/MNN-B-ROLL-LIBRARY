@@ -259,6 +259,106 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
     return EDL(theme=theme, music=music.path, clips=clips, duration_target_s=target_total)
 
 
+def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
+                              target_total: float = 28.0,
+                              slowmo_ceiling: float = 0.40,
+                              shot_to_shot_easing: bool = True) -> None:
+    """Apply the same deterministic post-pass as parse_director_edl (§7e / §8b).
+
+    Mutates ``edl.clips`` in-place.  ``scouts_by_path`` maps source path →
+    ClipScout (provides the measured exp/motion fields).
+
+    Called by pipeline.build_edl_scored so the scored fallback path gets the
+    same cinematic look as the director path.
+    """
+    REAL_MOVES = {"pan", "tilt", "push_in", "pull_back"}
+
+    # --- pair each clip with its scout (or a synthetic stand-in with defaults) ---
+    from .scout import ClipScout as _ClipScout
+
+    def _default_scout(path: str, duration: float) -> "_ClipScout":
+        return _ClipScout(path=path, score=0.0, best_in=0.0,
+                          best_out=duration, duration=duration, fps=0.0)
+
+    paired: List[tuple] = []
+    for clip in edl.clips:
+        sc = scouts_by_path.get(clip.source)
+        if sc is None:
+            sc = _default_scout(clip.source, clip.duration)
+        paired.append((clip, sc))
+
+    for clip, sc in paired:
+
+        # Step 1 — copy motion type
+        clip.motion_type = sc.motion_type
+
+        # Step 2 — one-motion windowing
+        if sc.motion_type in REAL_MOVES:
+            m_in = sc.motion_in
+            m_out = sc.motion_out if sc.motion_out > sc.motion_in else sc.duration
+            win_in = max(clip.in_point, m_in)
+            win_out = min(clip.out_point, m_out)
+            if win_in >= win_out:
+                desired_dur = clip.out_point - clip.in_point
+                win_in = m_in
+                win_out = min(m_in + desired_dur, m_out)
+                if win_out <= win_in:
+                    win_out = m_out
+            desired_dur = clip.out_point - clip.in_point
+            if (win_out - win_in) < desired_dur:
+                extra = desired_dur - (win_out - win_in)
+                pad_left = min(extra / 2.0, win_in - m_in)
+                pad_right = min(extra - pad_left, m_out - win_out)
+                win_in = max(m_in, win_in - pad_left)
+                win_out = min(m_out, win_out + pad_right)
+            clip.in_point = round(win_in, 3)
+            clip.out_point = round(win_out, 3)
+
+        # Step 3 — push-in / stabilize
+        if sc.motion_type in REAL_MOVES:
+            clip.push_in = 0.0
+        elif sc.motion_type == "complex":
+            clip.stabilize = True
+            clip.push_in = _push_in_for_duration(clip.duration)
+        else:  # static
+            clip.push_in = _push_in_for_duration(clip.duration)
+
+        # Step 4a — slow-mo safety (scored path: default static clips to normal)
+        if clip.retime == "slowmo" and sc.motion_type == "complex" and not clip.stabilize:
+            clip.retime = "normal"
+
+        # In the scored path clips start as normal; assign slowmo for clean moves
+        if clip.retime == "normal" and sc.motion_type in REAL_MOVES:
+            clip.retime = "slowmo"
+
+        # Step 5 — exposure
+        err = analysis.TARGET_MID - sc.exp_mean
+        adjust = max(-0.45, min(0.45, err / 140.0))
+        clip.exposure_adjust = round(adjust, 3)
+        clip.highlight_clip = sc.exp_highlight_clip
+
+    # Step 4b — slow-mo cap
+    total_slowmo_s = 0.0
+    cap_s = target_total * slowmo_ceiling
+    for clip in edl.clips:
+        if clip.retime == "slowmo":
+            on_screen = clip.duration * 2.5
+            if total_slowmo_s + on_screen > cap_s:
+                clip.retime = "normal"
+            else:
+                total_slowmo_s += on_screen
+
+    # Step 6 — shot-to-shot easing
+    if shot_to_shot_easing and paired:
+        exp_means = [sc.exp_mean for _, sc in paired]
+        timeline_mean = statistics.median(exp_means)
+        for clip, sc in paired:
+            matched_target = analysis.TARGET_MID * 0.65 + timeline_mean * 0.35
+            err2 = matched_target - sc.exp_mean
+            adjust2 = max(-0.45, min(0.45, err2 / 140.0))
+            clip.exposure_adjust = round(adjust2, 3)
+
+
 class DirectorClient:
     """Interface: turn a prompt + proxy video paths into the model's raw JSON dict."""
 
