@@ -8,6 +8,51 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# S-Log3 -> Rec.709 prediction LUT (verbatim from exposure doc §a)
+# ---------------------------------------------------------------------------
+
+TARGET_MID = 112  # 44% mid; matches the graded reference
+
+
+def _build_slog3_to_709_lut() -> np.ndarray:
+    cv = np.arange(256, dtype=np.float64) / 255.0
+    lin = np.where(
+        cv >= 171.2102946929 / 1023.0,
+        (10.0 ** ((cv * 1023.0 - 420.0) / 261.5)) * 0.19 - 0.01,
+        (cv * 1023.0 - 95.0) * 0.01125000 / (171.2102946929 - 95.0),
+    )
+    lin = np.clip(lin, 0.0, None)
+    v = np.where(lin < 0.018, lin * 4.5, 1.099 * np.power(lin, 0.45) - 0.099)
+    return np.clip(v, 0.0, 1.0)
+
+
+_SLOG3_709 = (_build_slog3_to_709_lut() * 255.0).astype(np.uint8)
+
+
+def exposure_stats(frame: np.ndarray, profile: str = "sony_slog3") -> dict:
+    """Return exposure statistics for *frame* (uint8 BGR or grayscale).
+
+    If *profile* is ``sony_slog3`` or ``dji_dlogm`` the grayscale luma is
+    first mapped through the S-Log3→Rec.709 prediction LUT so that
+    over/under-exposure is assessed in the display colour space.
+
+    Returns a dict with keys: ``mean``, ``shadow_clip``, ``highlight_clip``,
+    ``midtone``.
+    """
+    g = to_gray(frame)
+    if profile in ("sony_slog3", "dji_dlogm"):
+        g = np.take(_SLOG3_709, g)            # predict post-LUT 709 luma
+    hist = cv2.calcHist([g], [0], None, [256], [0, 256]).ravel()
+    total = float(g.size) or 1.0
+    mean = float((np.arange(256) * hist).sum() / total)
+    shadow_clip = float(hist[:6].sum()) / total
+    highlight_clip = float(hist[250:].sum()) / total
+    cdf = np.cumsum(hist) / total
+    median = float(np.searchsorted(cdf, 0.5))
+    return {"mean": round(mean, 2), "shadow_clip": round(shadow_clip, 4),
+            "highlight_clip": round(highlight_clip, 4), "midtone": round(median, 2)}
+
 
 def to_gray(frame: np.ndarray) -> np.ndarray:
     """BGR uint8 frame -> single-channel grayscale (2-D input passes through)."""
