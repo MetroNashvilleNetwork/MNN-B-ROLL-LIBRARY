@@ -63,29 +63,39 @@ def _candidate_manifest(candidates: Sequence[DirectorCandidate]) -> str:
 def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
                           music: MusicInfo, target_total: float = 28.0) -> str:
     n_shots = max(6, round(target_total / 1.2))
-    return f"""You are a senior video editor cutting a {target_total:.0f}-second vertical social montage on the theme "{theme}".
+    bpm = round(music.tempo)
+    beat = round(60.0 / bpm, 2) if bpm else 0
+    return f"""You are a senior video editor cutting a {target_total:.0f}-second vertical (9:16) social recap on the theme "{theme}" in the house style of Metro Nashville Network. Emulate this proven style exactly.
 
-You are shown {len(candidates)} b-roll proxy clips (low-res previews of the real footage), in the same order as this manifest:
+You are shown {len(candidates)} b-roll proxy clips (low-res previews), in this manifest order:
 {_candidate_manifest(candidates)}
 
-The music track is {music.duration:.0f}s at ~{music.tempo:.0f} BPM with {len(music.beats)} beats.
+Music: ~{bpm} BPM (one beat ~= {beat}s), {music.duration:.0f}s long.
 
-WATCH the clips and compose the edit. Output a `timeline`: an ordered list of cuts. For each cut choose:
-- clip_index: which clip (0-based, from the manifest)
-- in / out: the exact best in- and out-point IN SECONDS within that clip (pick the strongest moment you SEE)
-- role: "hook" for the very first (most arresting) shot, "closer" for the last, "body" otherwise
-- subject_x: 0.0=left .. 1.0=right, where the main subject sits, so vertical cropping keeps them framed
-- stabilize: true for ANY shot with visible handheld movement, bounce, or shake (most non-tripod / gimbal-less footage benefits) — be generous; smoothing a slightly shaky shot looks far more professional than leaving it shaky. Use false only for clearly locked-off / tripod shots.
-- retime: "slowmo" to play the shot as smooth slow motion (great for high-fps clips with flowing motion — water, crowds, movement); else "normal". NOTE: slowmo plays the clip roughly (its fps / 24) times slower, so a 1s in/out span becomes ~2.5s on screen for 60fps footage — pick a SHORTER in/out span for slowmo shots.
-- reason: one short phrase on why you chose this shot/moment
+WATCH the clips and compose the edit as a `timeline` of cuts. Follow this STRUCTURE/ARC:
+1. OPEN on 1-2 CLOSE DETAIL or PROP macro shots (a branded object, award, sign, hands) held longer (~3s, then ~2.5s). Do NOT open on a person or a wide.
+2. Then the FIRST HUMAN moment - a candid (~1.3s).
+3. Then an ESTABLISHING WIDE (~0.9s) to set the scene.
+4. BUILD and ACCELERATE - alternate people, reactions, details, action, with shots getting progressively SHORTER toward the end (start ~2s, finish ~0.4-0.6s rapid-fire).
+5. CLOSE on a longer WIDE group/hero hold (~2.5-3s) that breathes.
 
-Craft rules (make it look human-made, NOT auto-generated):
-- Open on the single strongest, most arresting shot (the hook) in the first ~1.5s.
-- PACING — cut FAST and punchy. Most shots should be about 1.0-1.4 seconds. Mix in occasional quick accent cuts (0.3-0.6s) and ONE or two longer hero holds (3-5s) for rhythm. VARY shot lengths; never metronomic, and never leave shots long or languid.
-- Aim for roughly {n_shots} shots total to fill {target_total:.0f}s at this fast pace.
-- Sequence with variety: establishing -> medium -> detail; never two near-identical shots back to back.
-- Use only the best clips; skip soft or poorly-exposed ones.
-- Keep it tight to about {target_total:.0f} seconds total.
+For each cut choose:
+- clip_index (from the manifest)
+- in / out: the single BEST moment in that clip, in seconds (strongest expression/action - NOT the first frames)
+- role: "hook" for shot 1, "closer" for the final hold, "body" otherwise
+- subject_x: 0.0=left .. 1.0=right, where the subject sits (for the vertical crop)
+- stabilize: true for any handheld/shaky shot
+- retime: "slowmo" ONLY for the single hero moment (see below); "normal" for everything else
+
+PACING:
+- Make shot durations land on the beat; a cut feels tightest landing 1-2 frames BEFORE the beat.
+- VARY shot lengths; never more than 3 same-length shots in a row.
+- Aim for about {n_shots} shots, following the slow->fast acceleration arc above.
+
+SLOW-MO - use SPARINGLY (the reference used almost none):
+- At most ONE hero slow-mo, in the final third, ONLY on a shot that earns it (applause, water, a gesture, a reveal). It plays ~2.5x slower, so give it a SHORT (~1.2-1.5s) in/out span. Do NOT slow other clips.
+
+RULES: ALL HARD CUTS (no dissolves). Prioritize emotional + story moments. Use only strong clips - skip soft, over/under-exposed, or repetitive ones.
 
 Output ONLY JSON matching the schema."""
 
