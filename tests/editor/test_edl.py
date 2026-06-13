@@ -41,3 +41,31 @@ def test_clip_retime_defaults():
     c = _clip()
     assert c.retime == "normal" and c.source_fps == 0.0
     assert _clip(retime="slowmo", source_fps=60.0).retime == "slowmo"
+
+
+def test_clip_new_fields_default_correctly():
+    c = _clip()
+    assert c.exposure_adjust == 0.0
+    assert c.highlight_clip == 0.0
+    assert c.motion_type == "static"
+    assert c.push_in == 0.0
+
+
+def test_clip_new_fields_are_settable():
+    c = _clip(exposure_adjust=0.25, highlight_clip=0.05,
+              motion_type="pan", push_in=0.07)
+    assert c.exposure_adjust == 0.25
+    assert c.highlight_clip == 0.05
+    assert c.motion_type == "pan"
+    assert c.push_in == 0.07
+
+
+def test_clip_new_fields_negative_exposure():
+    c = _clip(exposure_adjust=-0.30)
+    assert c.exposure_adjust == -0.30
+
+
+def test_clip_new_fields_all_motion_types():
+    for mt in ("pan", "tilt", "push_in", "pull_back", "static", "complex"):
+        c = _clip(motion_type=mt)
+        assert c.motion_type == mt

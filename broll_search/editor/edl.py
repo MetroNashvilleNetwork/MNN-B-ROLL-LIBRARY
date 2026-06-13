@@ -20,6 +20,12 @@ class Clip:
     subject_x: float = 0.5   # 0=left..1=right; where to anchor the vertical reframe
     retime: str = "normal"      # "normal" | "slowmo"
     source_fps: float = 0.0     # used to compute the slow-mo factor when retime == "slowmo"
+    # exposure (deterministic, computed from measurement — NOT model-chosen)
+    exposure_adjust: float = 0.0    # signed; renderer maps to eq/curves. abs<0.04 => no filter
+    highlight_clip: float = 0.0     # >0.02 => prepend colorlevels ceiling pull
+    # motion / one-motion-per-clip
+    motion_type: str = "static"     # pan|tilt|push_in|pull_back|static|complex
+    push_in: float = 0.0            # synthetic push amount (0 = none; 0.05/0.07/0.08 by duration)
 
     @property
     def duration(self) -> float:
