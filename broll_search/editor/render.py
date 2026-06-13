@@ -76,6 +76,7 @@ def render_format(
     font_path: str = "",
     final_quality: bool = True,
     outro: str = "card",
+    slowmo_factor: float = 0.0,
 ) -> Path:
     if not edl.clips:
         raise ValueError("render_format: EDL has no clips")
@@ -132,7 +133,7 @@ def render_format(
                                          exposure_adjust=clip.exposure_adjust,
                                          highlight_clip=clip.highlight_clip,
                                          push=clip.push_in, n_frames=n_frames,
-                                         prescale_h=prescale_h)
+                                         prescale_h=prescale_h, slowmo_factor=slowmo_factor)
             _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-t", str(clip.duration),
                   "-i", clip.source, "-an", "-vf", vf, "-r", edl.fps,
                   "-c:v", "libx264", "-crf", "18", "-preset", "medium",

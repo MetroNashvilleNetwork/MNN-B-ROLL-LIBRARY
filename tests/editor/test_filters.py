@@ -72,6 +72,18 @@ def test_retime_filter_normal_or_lowfps_is_empty():
     assert retime_filter("slowmo", 24.0, "24000/1001") == ""   # not high-fps -> no slow
 
 
+def test_retime_optical_factor_has_no_interpolation():
+    """Default (factor=0) uses the frame-exact 2.5x ratio, no interpolation."""
+    f = retime_filter("slowmo", 60.0, "24000/1001")
+    assert "2.5" in f and "minterpolate" not in f
+
+
+def test_retime_higher_factor_adds_motion_interpolation():
+    """A factor past the optical ratio adds minterpolate for smooth slower slow-mo."""
+    f = retime_filter("slowmo", 60.0, "24000/1001", slowmo_factor=3.0)
+    assert "setpts=3.0" in f and "minterpolate" in f and "mci" in f
+
+
 def test_clip_video_chain_inserts_setpts_before_fps_when_slowmo():
     chain = clip_video_chain("rec709", "luts", 1080, 1920, "24000/1001",
                              retime="slowmo", source_fps=60.0)

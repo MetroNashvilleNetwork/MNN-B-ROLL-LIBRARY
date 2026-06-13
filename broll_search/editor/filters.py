@@ -64,16 +64,27 @@ def _fps_to_float(fps) -> float:
         return 0.0
 
 
-def retime_filter(retime: str, source_fps: float, target_fps: str = "24000/1001") -> str:
-    """Return a setpts slow-motion filter, or '' if no slowdown applies.
-    Slowmo plays every source frame at the target rate -> factor = source/target."""
+def retime_filter(retime: str, source_fps: float, target_fps: str = "24000/1001",
+                  slowmo_factor: float = 0.0) -> str:
+    """Return a setpts slow-motion filter (plus motion interpolation when needed),
+    or '' if no slowdown applies.
+
+    The frame-exact ratio is source/target (e.g. 60/24 = 2.5x): each source frame
+    maps to exactly one output frame — perfectly smooth, no interpolation. A larger
+    slowmo_factor (e.g. 3.0) plays slower than the footage can supply, so minterpolate
+    (motion-compensated) synthesizes the in-between frames to keep it smooth."""
     if retime != "slowmo":
         return ""
     tgt = _fps_to_float(target_fps)
     if not source_fps or not tgt or source_fps <= tgt * 1.1:
         return ""
-    factor = round(source_fps / tgt, 4)
-    return f"setpts={factor}*PTS"
+    optical = source_fps / tgt
+    factor = round(slowmo_factor if slowmo_factor and slowmo_factor > 0 else optical, 4)
+    setpts = f"setpts={factor}*PTS"
+    if factor > optical + 0.05:        # slower than frame-exact -> interpolate
+        return (f"{setpts},minterpolate=fps={target_fps}:mi_mode=mci:"
+                f"mc_mode=aobmc:me_mode=bidir")
+    return setpts
 
 
 def exposure_filter(adjust: float, highlight_clip: float = 0.0) -> str:
@@ -128,7 +139,8 @@ def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
                      retime: str = "normal", source_fps: float = 0.0,
                      exposure_adjust: float = 0.0, highlight_clip: float = 0.0,
                      push: float = 0.0, n_frames: int = 0,
-                     prescale_h: int = 0, saturation: float = 1.2) -> str:
+                     prescale_h: int = 0, saturation: float = 1.2,
+                     slowmo_factor: float = 0.0) -> str:
     """Per-clip video chain: color (with dial-able look strength) -> reframe ->
     retime -> conform -> 8-bit 4:2:0.
 
@@ -161,7 +173,7 @@ def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
     #     the external conform_filter works normally.
     src_fps_val = source_fps if source_fps else _fps_to_float(fps)
     zoompan_needed = push > 0 or prescale_h > 0
-    rt = retime_filter(retime, source_fps, fps)
+    rt = retime_filter(retime, source_fps, fps, slowmo_factor)
     if zoompan_needed:
         # zoompan path: embed fps inside zoompan (workaround for ffmpeg 8.x bug
         # where any external fps= filter after zoompan causes infinite looping).

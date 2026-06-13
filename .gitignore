@@ -29,3 +29,4 @@ output/
 .venv-editor/
 .gemini_key
 _autoedit_settings.bat
+tools/
