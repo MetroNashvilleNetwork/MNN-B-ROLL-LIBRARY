@@ -82,21 +82,29 @@ def _candidate_manifest(candidates: Sequence[DirectorCandidate]) -> str:
 
 def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
                           music: MusicInfo, target_total: float = 28.0,
-                          slowmo_all: bool = False) -> str:
+                          slowmo_all: bool = False, slowmo_factor: float = 0.0) -> str:
     """7d — cinematic direction: premium + SMOOTH, one-motion, mostly-slowmo."""
-    n_shots = max(6, round(target_total / 1.2))
-    slowmo_cap = math.ceil(n_shots * 0.85)
     bpm = round(music.tempo)
     beat = round(60.0 / bpm, 2) if bpm else 0
     if slowmo_all:
+        # full slow-mo: fewer, longer-held shots; source spans sized to the factor so
+        # the slowed total still lands near target (factor-aware = right pacing at any speed).
+        eff = slowmo_factor if slowmo_factor and slowmo_factor > 0 else 2.5
+        hold = 1.8                                   # on-screen seconds per shot (languid)
+        n_shots = max(6, round(target_total / hold))
+        slowmo_cap = n_shots
+        span = round(hold / eff, 2)                  # source seconds per shot
         slowmo_block = (
-            "EVERY SHOT IS SLOW-MO (100%):\n"
-            "This entire edit is slow-motion — set retime=slowmo on EVERY clip. Slow-mo plays "
-            f"~2.5× slower, so give each clip a SHORT (~0.6–1.0s) source span; with ~{n_shots} shots "
-            f"the slowed total lands near {target_total:.0f}s. Pick the single cleanest moment in each "
-            "clip. Do NOT slow-mo a `complex` clip unless you also set stabilize=true."
+            f"EVERY SHOT IS SLOW-MO at {eff:g}x ({100.0 / eff:.0f}% speed):\n"
+            "This entire edit is slow-motion — set retime=slowmo on EVERY clip. Each clip plays "
+            f"{eff:g}x slower, so give each a SHORT source span of about {span:.1f}s (it becomes ~{hold:.1f}s "
+            f"on screen). Aim for about {n_shots} shots so the slowed total lands near {target_total:.0f}s. "
+            "Let each shot BREATHE — languid and dramatic, never rushed. Pick the single cleanest moment in "
+            "each clip. Do NOT slow-mo a `complex` clip unless you also set stabilize=true."
         )
     else:
+        n_shots = max(6, round(target_total / 1.2))
+        slowmo_cap = math.ceil(n_shots * 0.85)
         slowmo_block = (
             "MAINLY SLOW-MO (this is the dominant feel):\n"
             "The LARGE MAJORITY of this edit is slow-motion. Set retime=slowmo on almost every clip that "
@@ -427,8 +435,10 @@ def compose_edit(theme: str, candidates: Sequence[DirectorCandidate], music: Mus
                  client: DirectorClient, default_profile: str = "rec709",
                  target_total: float = 28.0,
                  slowmo_ceiling: float = 0.85,
-                 slowmo_all: bool = False) -> EDL:
-    prompt = build_director_prompt(theme, candidates, music, target_total, slowmo_all=slowmo_all)
+                 slowmo_all: bool = False,
+                 slowmo_factor: float = 0.0) -> EDL:
+    prompt = build_director_prompt(theme, candidates, music, target_total,
+                                   slowmo_all=slowmo_all, slowmo_factor=slowmo_factor)
     proxy_paths = [c.proxy_path for c in candidates]
     data = client.generate_edl(prompt, proxy_paths)
     return parse_director_edl(data, candidates, theme, music, default_profile, target_total,

@@ -236,6 +236,12 @@ def test_prompt_directs_best_moment_per_clip():
     assert "STRONGEST moment" in p    # explicit best-moment directive
 
 
+def test_prompt_slowmo_all_is_factor_aware():
+    """Full slow-mo prompt states the actual speed and sizes spans to the factor."""
+    p = build_director_prompt("Parks", _cands(), _music(), 24, slowmo_all=True, slowmo_factor=4.0)
+    assert "4x" in p and "25% speed" in p
+
+
 def test_prompt_smooth_and_premium():
     p = build_director_prompt("Parks", _cands(), _music(), 24).lower()
     assert "smooth" in p

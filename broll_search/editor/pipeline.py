@@ -61,7 +61,8 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
                        target_total: float, default_profile: str,
                        cache: dict, proxy_dir, ffmpeg_path: str, client,
                        max_candidates: int = 40,
-                       slowmo_ceiling: float = 0.85, slowmo_all: bool = False) -> EDL:
+                       slowmo_ceiling: float = 0.85, slowmo_all: bool = False,
+                       slowmo_factor: float = 0.0) -> EDL:
     """Director-driven EDL: rank clips, scout them (with correct profile), pass to Gemini."""
     music = analyze_music(music_path)
     ranked = []
@@ -91,7 +92,8 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
         ))
     return compose_edit(theme, candidates, music, client,
                         default_profile=default_profile, target_total=target_total,
-                        slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
+                        slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all,
+                        slowmo_factor=slowmo_factor)
 
 
 def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
@@ -156,7 +158,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
             edl = build_edl_director(clip_paths, music_path, theme, target_total,
                                      default_profile, cache, pdir, ffmpeg,
                                      director_client, max_candidates,
-                                     slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
+                                     slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all,
+                                     slowmo_factor=slowmo_factor)
             errs = validate_edl(edl)
         except Exception:
             edl, errs = None, ["director failed"]
