@@ -404,20 +404,33 @@ def test_closer_forced_slowmo_and_protected_from_cap():
     assert edl.clips[-1].retime == "slowmo"   # forced from normal + protected from cap
 
 
+def test_slowmo_all_forces_every_clip_and_ignores_cap():
+    """slowmo_all=True puts every eligible clip in slow-mo, regardless of the cap."""
+    cands = [_cand_static(index=i, duration=5.0) for i in range(4)]
+    data = {"timeline": [
+        {"clip_index": i, "in": 0.0, "out": 4.0,
+         "role": ("closer" if i == 3 else "body"), "retime": "normal"}
+        for i in range(4)
+    ]}
+    edl = parse_director_edl(data, cands, "t", _music(), target_total=10.0,
+                             slowmo_ceiling=0.3, slowmo_all=True, shot_to_shot_easing=False)
+    assert all(c.retime == "slowmo" for c in edl.clips)   # tight cap is ignored
+
+
 # --- Step 5: exposure adjust ---
 
 def test_dark_candidate_positive_exposure_adjust():
-    """midtone=56 (dark) => err=112-56=56, adjust=56/140=0.40."""
+    """midtone=56 (very dark) => err=125-56=69, 69/140=0.49 clamped to +0.45 max lift."""
     cand = _cand_static(index=0, exp_midtone=56.0, duration=3.0)
     data = _simple_edl_data(index=0, in_p=0.0, out_p=2.5)
     edl = parse_director_edl(data, [cand], "t", _music(), shot_to_shot_easing=False)
     clip = edl.clips[0]
-    assert clip.exposure_adjust == pytest.approx(0.4, abs=0.01)
+    assert clip.exposure_adjust == pytest.approx(0.45, abs=0.01)
 
 
 def test_hot_candidate_negative_exposure_adjust():
-    """midtone=150 (bright) => raw -0.271, clamped to the -0.22 darken floor."""
-    cand = _cand_static(index=0, exp_midtone=150.0, duration=3.0)
+    """midtone=200 (very bright) => err=125-200=-75, -0.536 clamped to the -0.22 darken floor."""
+    cand = _cand_static(index=0, exp_midtone=200.0, duration=3.0)
     data = _simple_edl_data(index=0, in_p=0.0, out_p=2.5)
     edl = parse_director_edl(data, [cand], "t", _music(), shot_to_shot_easing=False)
     clip = edl.clips[0]
@@ -435,8 +448,8 @@ def test_bright_mean_but_dark_midtone_is_lifted_not_darkened():
 
 
 def test_neutral_candidate_small_exposure_adjust():
-    """exp_mean=112 (perfectly neutral) => adjust=0.0."""
-    cand = _cand_static(index=0, exp_mean=112.0, duration=3.0)
+    """midtone=125 (== TARGET_MID) => adjust=0.0."""
+    cand = _cand_static(index=0, exp_midtone=125.0, duration=3.0)
     data = _simple_edl_data(index=0, in_p=0.0, out_p=2.5)
     edl = parse_director_edl(data, [cand], "t", _music(), shot_to_shot_easing=False)
     clip = edl.clips[0]

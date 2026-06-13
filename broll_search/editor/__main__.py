@@ -38,6 +38,8 @@ def main(argv=None) -> int:
                    help="Max fraction of total runtime that may be slow-mo (default 0.85)")
     p.add_argument("--outro", choices=["card", "fade", "none"], default="fade",
                    help="Ending: 'fade' = fade to black (default), 'card' = branded outro card, 'none' = hard cut")
+    p.add_argument("--slowmo-all", action="store_true",
+                   help="Full slow-motion: every eligible clip plays slow (overrides the slow-mo ceiling)")
     p.add_argument("--preview", action="store_true",
                    help="Fast preview render (2160p prescale, for dev/Mac); omit for 4K-final quality")
     args = p.parse_args(argv)
@@ -63,7 +65,8 @@ def main(argv=None) -> int:
                            exposure=not args.no_exposure,
                            slowmo_ceiling=args.slowmo_ceiling,
                            final_quality=not args.preview,
-                           outro=args.outro)
+                           outro=args.outro,
+                           slowmo_all=args.slowmo_all)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

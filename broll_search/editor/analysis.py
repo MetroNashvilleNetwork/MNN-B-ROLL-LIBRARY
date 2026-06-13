@@ -12,7 +12,7 @@ import numpy as np
 # S-Log3 -> Rec.709 prediction LUT (verbatim from exposure doc §a)
 # ---------------------------------------------------------------------------
 
-TARGET_MID = 112  # 44% mid; matches the graded reference
+TARGET_MID = 125  # ~49% mid; raised per Gibby feedback ("a little too dark")
 
 
 def _build_slog3_to_709_lut() -> np.ndarray:

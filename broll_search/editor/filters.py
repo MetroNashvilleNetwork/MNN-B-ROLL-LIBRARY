@@ -128,7 +128,7 @@ def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
                      retime: str = "normal", source_fps: float = 0.0,
                      exposure_adjust: float = 0.0, highlight_clip: float = 0.0,
                      push: float = 0.0, n_frames: int = 0,
-                     prescale_h: int = 0) -> str:
+                     prescale_h: int = 0, saturation: float = 1.2) -> str:
     """Per-clip video chain: color (with dial-able look strength) -> reframe ->
     retime -> conform -> 8-bit 4:2:0.
 
@@ -180,6 +180,9 @@ def clip_video_chain(profile: str, lut_dir: str, width: int, height: int,
             tail_parts.append(rt)
         tail_parts += [conform_filter(fps), "format=yuv420p"]
     tail = ",".join(tail_parts)
+    # saturation boost on the graded image (before reframe; shared by all paths)
+    if abs(saturation - 1.0) > 0.01:
+        tail = f"eq=saturation={round(saturation, 3)}," + tail
 
     # --- colour path ---
     if s >= 0.999:

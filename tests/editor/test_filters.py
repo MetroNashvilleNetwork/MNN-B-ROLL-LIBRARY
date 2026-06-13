@@ -261,7 +261,19 @@ def test_chain_format_yuv420p_is_last():
 
 
 def test_chain_no_exposure_when_adjust_tiny():
-    """No eq in chain when exposure_adjust is below threshold."""
+    """No exposure eq in chain when exposure_adjust is below threshold."""
     chain = clip_video_chain("sony_slog3", "luts", 1080, 1920, "24000/1001",
-                             look_strength=1.0, exposure_adjust=0.02)
+                             look_strength=1.0, exposure_adjust=0.02, saturation=1.0)
     assert "eq=" not in chain
+
+
+def test_chain_includes_saturation_by_default():
+    """The grade adds a saturation boost by default (Gibby: 'add some saturation')."""
+    chain = clip_video_chain("sony_slog3", "luts", 1080, 1920, "24000/1001", look_strength=0.4)
+    assert "eq=saturation=1.2" in chain
+
+
+def test_chain_saturation_disabled_at_unity():
+    chain = clip_video_chain("sony_slog3", "luts", 1080, 1920, "24000/1001",
+                             look_strength=0.4, saturation=1.0)
+    assert "saturation" not in chain

@@ -42,7 +42,7 @@ def find_media(folder: Path, exts) -> List[Path]:
 def build_edl_scored(clip_paths: Sequence[str], music_path: str, theme: str,
                      target_total: float, default_profile: str,
                      cache: dict, window: float = 1.5,
-                     slowmo_ceiling: float = 0.85) -> EDL:
+                     slowmo_ceiling: float = 0.85, slowmo_all: bool = False) -> EDL:
     """Quality-ranked EDL + apply the same cinematic post-pass as the director path."""
     scouts = [scout_clip_cached(p, cache, window=window,
                                 profile=profile_for(p, default_profile))
@@ -53,7 +53,7 @@ def build_edl_scored(clip_paths: Sequence[str], music_path: str, theme: str,
     # 8b — build a scouts_by_path dict so apply_cinematic_defaults can look up measurements
     scouts_by_path = {sc.path: sc for sc in scouts}
     apply_cinematic_defaults(edl, scouts_by_path,
-                             target_total=target_total, slowmo_ceiling=slowmo_ceiling)
+                             target_total=target_total, slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
     return edl
 
 
@@ -61,7 +61,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
                        target_total: float, default_profile: str,
                        cache: dict, proxy_dir, ffmpeg_path: str, client,
                        max_candidates: int = 40,
-                       slowmo_ceiling: float = 0.85) -> EDL:
+                       slowmo_ceiling: float = 0.85, slowmo_all: bool = False) -> EDL:
     """Director-driven EDL: rank clips, scout them (with correct profile), pass to Gemini."""
     music = analyze_music(music_path)
     ranked = []
@@ -90,7 +90,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
         ))
     return compose_edit(theme, candidates, music, client,
                         default_profile=default_profile, target_total=target_total,
-                        slowmo_ceiling=slowmo_ceiling)
+                        slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
 
 
 def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
@@ -113,7 +113,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  exposure: bool = True,
                  slowmo_ceiling: float = 0.85,
                  final_quality: bool = True,
-                 outro: str = "fade"):
+                 outro: str = "fade",
+                 slowmo_all: bool = False):
     """Run the full pipeline: scout → EDL → render two formats.
 
     Parameters
@@ -153,18 +154,18 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
             edl = build_edl_director(clip_paths, music_path, theme, target_total,
                                      default_profile, cache, pdir, ffmpeg,
                                      director_client, max_candidates,
-                                     slowmo_ceiling=slowmo_ceiling)
+                                     slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
             errs = validate_edl(edl)
         except Exception:
             edl, errs = None, ["director failed"]
         if edl is None or errs:
             edl = build_edl_scored(clip_paths, music_path, theme, target_total,
                                    default_profile, cache,
-                                   slowmo_ceiling=slowmo_ceiling)
+                                   slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
     elif scored:
         edl = build_edl_scored(clip_paths, music_path, theme, target_total,
                                default_profile, cache,
-                               slowmo_ceiling=slowmo_ceiling)
+                               slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
     else:
         edl = build_edl(clip_paths, music_path, theme, target_total,
                         default_profile, ffprobe_path=ffprobe)

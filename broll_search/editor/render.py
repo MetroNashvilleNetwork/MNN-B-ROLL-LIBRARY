@@ -116,7 +116,7 @@ def render_format(
                     # Bump smoothing to 50 for complex clips with high motion_strength (>=15 %/s)
                     motion_type = getattr(clip, "motion_type", "static")
                     motion_strength = getattr(clip, "motion_strength", 0.0)
-                    smoothing = 50 if (motion_type == "complex" and motion_strength >= 15.0) else 40
+                    smoothing = 65 if (motion_type == "complex" and motion_strength >= 15.0) else 55
                     stab = (f"vidstabtransform=input={escape_filter_path(str(trf))}:smoothing={smoothing}:"
                             f"optzoom=1:zoom=0:interpol=bicubic:crop=black,"
                             f"unsharp=5:5:0.8:3:3:0.4,")
