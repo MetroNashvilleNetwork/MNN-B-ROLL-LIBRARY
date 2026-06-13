@@ -48,7 +48,7 @@ def test_render_vertical_produces_playable_mp4(tmp_path):
     ])
     out = tmp_path / "vertical.mp4"
     render_format(edl, out, width=1080, height=1920, lut_dir="luts",
-                  ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+                  ffmpeg_path=ffmpeg, tmpdir=tmp_path, final_quality=False)
 
     assert out.exists() and out.stat().st_size > 0
     meta = _ffprobe_json(out)
@@ -73,7 +73,7 @@ def test_render_is_cwd_independent(tmp_path, monkeypatch):
     out = tmp_path / "out_cwd_test.mp4"
     # Do NOT pass cwd — must default to PROJECT_ROOT so luts/ resolves
     render_format(edl, out, width=1080, height=1920, lut_dir="luts",
-                  ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+                  ffmpeg_path=ffmpeg, tmpdir=tmp_path, final_quality=False)
 
     assert out.exists() and out.stat().st_size > 0
     meta = _ffprobe_json(out)
@@ -96,7 +96,7 @@ def test_render_duration_uses_shortest(tmp_path):
     ])
     out = tmp_path / "shortest.mp4"
     render_format(edl, out, width=1080, height=1920, lut_dir="luts",
-                  ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+                  ffmpeg_path=ffmpeg, tmpdir=tmp_path, final_quality=False)
 
     meta = _ffprobe_json(out)
     duration = float(meta["format"]["duration"])
@@ -125,7 +125,8 @@ def test_render_slowmo_stretches_duration(tmp_path):
     edl = EDL(theme="t", music=str(music), clips=[
         Clip(1, str(src), 0.0, 1.0, "rec709", "hook", retime="slowmo", source_fps=60.0)])
     out = tmp_path / "v.mp4"
-    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path,
+                  final_quality=False)
     # 1.0s of 60fps source, slowed by ~2.5x -> ~2.5s on screen
     assert 2.2 < _ffprobe_duration(out) < 2.8
 
@@ -140,7 +141,7 @@ def test_render_with_branding_adds_cards(tmp_path):
         Clip(2, str(a), 0.0, 1.0, "rec709", "closer")])
     out = tmp_path / "branded.mp4"
     render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg,
-                  tmpdir=tmp_path, brand_enabled=True)
+                  tmpdir=tmp_path, brand_enabled=True, final_quality=False)
     assert out.exists()
     # clips total ~2.5s; title+outro cards add ~3s -> well over 4s
     assert _ffprobe_duration(out) > 4.0
@@ -166,7 +167,8 @@ def test_render_stabilized_clip_succeeds(tmp_path):
     edl = EDL(theme="t", music=str(music), clips=[
         Clip(1, str(src), 0.0, 1.5, "rec709", "hook", stabilize=True)])
     out = tmp_path / "v.mp4"
-    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path)
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg, tmpdir=tmp_path,
+                  final_quality=False)
     assert out.exists() and out.stat().st_size > 0       # stabilized clip rendered cleanly
 
 
@@ -178,5 +180,46 @@ def test_render_partial_look_strength_runs(tmp_path):
     edl = EDL(theme="t", music=str(music), clips=[Clip(1, str(src), 0.0, 1.5, "sony_slog3", "hook")])
     out = tmp_path / "v.mp4"
     render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg,
-                  tmpdir=tmp_path, look_strength=0.4)
+                  tmpdir=tmp_path, look_strength=0.4, final_quality=False)
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_render_pushin_stabilized_exposure_no_loop(tmp_path):
+    """Guard against the zoompan-loop bug: a clip with push_in>0, stabilize=True,
+    and exposure_adjust must produce a sane-duration 1080x1920 MP4 (NOT ~960s)."""
+    import time
+    src = tmp_path / "FX6_push.mp4"
+    music = tmp_path / "m.wav"
+    # Generate a 60 fps testsrc2 clip (2 s) and a tone
+    subprocess.run([ffmpeg, "-y", "-f", "lavfi",
+                    "-i", "testsrc2=size=1280x720:rate=60",
+                    "-t", "2", "-pix_fmt", "yuv420p", str(src)],
+                   check=True, capture_output=True)
+    _make_tone(music, 10)
+
+    edl = EDL(theme="t", music=str(music), clips=[
+        Clip(1, str(src), 0.0, 1.5, "rec709", "hook",
+             stabilize=True,
+             source_fps=60.0,
+             push_in=0.06,
+             exposure_adjust=0.1),
+    ])
+    out = tmp_path / "push_stab.mp4"
+    t0 = time.monotonic()
+    render_format(edl, out, 1080, 1920, lut_dir="luts", ffmpeg_path=ffmpeg,
+                  tmpdir=tmp_path, final_quality=False)
+    elapsed = time.monotonic() - t0
+
+    assert out.exists() and out.stat().st_size > 0
+    meta = _ffprobe_json(out)
+    vid = next(s for s in meta["streams"] if s["codec_type"] == "video")
+    assert vid["width"] == 1080 and vid["height"] == 1920
+
+    duration = float(meta["format"]["duration"])
+    # 1.5 s source at normal speed — must be well under 10 s (NOT ~960 s loop bug)
+    assert duration < 10.0, (
+        f"Output duration {duration:.1f}s suggests zoompan-loop bug (expected <10s); "
+        f"render took {elapsed:.1f}s"
+    )
+    # Sanity check: render itself should complete in reasonable wall time
+    assert elapsed < 120.0, f"Render took {elapsed:.1f}s — suspiciously slow"

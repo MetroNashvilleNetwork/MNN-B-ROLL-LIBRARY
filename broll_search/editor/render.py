@@ -74,6 +74,7 @@ def render_format(
     cwd: Optional[Path] = None,
     brand_enabled: bool = False,
     font_path: str = "",
+    final_quality: bool = True,
 ) -> Path:
     if not edl.clips:
         raise ValueError("render_format: EDL has no clips")
@@ -109,15 +110,28 @@ def render_format(
                     trf = tmp / f"stab_{clip.id:03d}.trf"
                     _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-t", str(clip.duration),
                           "-i", clip.source, "-vf",
-                          f"vidstabdetect=shakiness=8:accuracy=15:result={escape_filter_path(str(trf))}",
+                          f"vidstabdetect=shakiness=10:accuracy=15:stepsize=6:mincontrast=0.3:result={escape_filter_path(str(trf))}",
                           "-f", "null", "-"], cwd=run_cwd, timeout=600)
-                    stab = (f"vidstabtransform=input={escape_filter_path(str(trf))}:smoothing=30:"
-                            f"crop=black:zoom=0,unsharp=5:5:0.6:3:3:0.4,")
+                    # Bump smoothing to 50 for complex clips with high motion_strength (>=15 %/s)
+                    motion_type = getattr(clip, "motion_type", "static")
+                    motion_strength = getattr(clip, "motion_strength", 0.0)
+                    smoothing = 50 if (motion_type == "complex" and motion_strength >= 15.0) else 40
+                    stab = (f"vidstabtransform=input={escape_filter_path(str(trf))}:smoothing={smoothing}:"
+                            f"optzoom=1:zoom=0:interpol=bicubic:crop=black,"
+                            f"unsharp=5:5:0.8:3:3:0.4,")
                 elif stab_mode == "deshake":
-                    stab = "deshake,"
+                    stab = "deshake=rx=64:ry=64:edge=clamp:blocksize=8:contrast=125:search=1,"
+            # Compute zoompan frame count (pre-slowmo, in source-fps units)
+            src_fps = clip.source_fps or (60000 / 1001)
+            n_frames = max(1, int(round(clip.duration * src_fps)))
+            prescale_h = 4320 if final_quality else 2160
             vf = stab + clip_video_chain(clip.color_profile, lut_dir, width, height,
                                          edl.fps, look_strength, subject_x=clip.subject_x,
-                                         retime=clip.retime, source_fps=clip.source_fps)
+                                         retime=clip.retime, source_fps=clip.source_fps,
+                                         exposure_adjust=clip.exposure_adjust,
+                                         highlight_clip=clip.highlight_clip,
+                                         push=clip.push_in, n_frames=n_frames,
+                                         prescale_h=prescale_h)
             _run([ffmpeg_path, "-y", "-ss", str(clip.in_point), "-t", str(clip.duration),
                   "-i", clip.source, "-an", "-vf", vf, "-r", edl.fps,
                   "-c:v", "libx264", "-crf", "18", "-preset", "medium",
