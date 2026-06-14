@@ -40,7 +40,8 @@ def beat_segment_endpoints(
 
 
 def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
-                        start_offset: float = 0.0, target_hold: float = 1.8,
+                        start_offset: float = 0.0, target_hold: float = 1.5,
+                        target_total: float = 0.0,
                         pattern: Sequence[int] = ()) -> None:
     """Resize each clip so its cut boundary lands on a music beat.
 
@@ -63,8 +64,10 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
         pattern = (base + 1, base, base + 1, base, base, base + 1)
     cut_t = float(start_offset)
     idx = bisect.bisect_right(beats, cut_t)                  # first beat after the start
+    kept = len(clips)
     for k, clip in enumerate(clips):
         if idx >= len(beats):
+            kept = k
             break
         if clip.retime == "slowmo":
             f = slowmo_factor if (slowmo_factor and slowmo_factor > 0) else 2.5
@@ -76,6 +79,7 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
             j += 1
         onscreen = beats[j] - cut_t
         if onscreen <= 0:
+            kept = k
             break
         span = round(onscreen / f, 3)
         mid = (clip.in_point + clip.out_point) / 2.0
@@ -84,3 +88,8 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
         clip.out_point = round(new_in + span, 3)
         cut_t = beats[j]
         idx = j + 1
+        if target_total and (cut_t - start_offset) >= target_total:  # length ceiling
+            kept = k + 1
+            break
+    if 0 < kept < len(clips):                                # drop clips past the ceiling
+        del clips[kept:]

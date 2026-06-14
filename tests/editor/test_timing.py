@@ -26,6 +26,14 @@ def test_snap_preserves_best_moment_center():
     assert abs((c.in_point + c.out_point) / 2.0 - 3.2) < 0.05
 
 
+def test_snap_truncates_to_target_total():
+    beats = [round(0.5 * i, 3) for i in range(80)]   # 0..39.5s of beats
+    clips = [_slowmo_clip(i) for i in range(1, 30)]  # 29 clips — uncapped would run ~50s+
+    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, target_total=12.0)
+    runtime = sum((c.out_point - c.in_point) * 4.0 for c in clips)
+    assert len(clips) < 29 and runtime <= 14.0    # capped near the 12s ceiling
+
+
 def test_snap_respects_start_offset():
     beats = [round(0.5 * i, 3) for i in range(40)]
     clips = [_slowmo_clip(i) for i in range(1, 4)]

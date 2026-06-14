@@ -98,7 +98,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
     if beat_sync:
         from .timing import snap_clips_to_beats
         snap_clips_to_beats(edl.clips, music.beats, slowmo_factor=slowmo_factor,
-                            start_offset=intro_offset)
+                            start_offset=intro_offset, target_total=target_total)
     return edl
 
 
