@@ -1,4 +1,40 @@
-from broll_search.editor.timing import beat_segment_endpoints
+from broll_search.editor.timing import beat_segment_endpoints, snap_clips_to_beats
+from broll_search.editor.edl import Clip
+
+
+def _slowmo_clip(i, in_p=2.0, out_p=2.5):
+    return Clip(id=i, source=f"{i}.mov", in_point=in_p, out_point=out_p,
+                color_profile="rec709", retime="slowmo", source_fps=60.0)
+
+
+def test_snap_lands_every_cut_on_a_beat():
+    beats = [round(0.5 * i, 3) for i in range(40)]   # 120 BPM grid
+    clips = [_slowmo_clip(i) for i in range(1, 6)]
+    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, start_offset=0.0)
+    beatset = set(round(b, 3) for b in beats)
+    t = 0.0
+    for c in clips:
+        onscreen = (c.out_point - c.in_point) * 4.0   # 4x slow-mo
+        t = round(t + onscreen, 3)
+        assert t in beatset, f"cut at {t}s is not on a beat"
+
+
+def test_snap_preserves_best_moment_center():
+    beats = [round(0.5 * i, 3) for i in range(40)]
+    c = _slowmo_clip(1, in_p=3.0, out_p=3.4)          # best-moment midpoint = 3.2
+    snap_clips_to_beats([c], beats, slowmo_factor=4.0)
+    assert abs((c.in_point + c.out_point) / 2.0 - 3.2) < 0.05
+
+
+def test_snap_respects_start_offset():
+    beats = [round(0.5 * i, 3) for i in range(40)]
+    clips = [_slowmo_clip(i) for i in range(1, 4)]
+    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, start_offset=1.8)
+    beatset = set(round(b, 3) for b in beats)
+    t = 1.8   # footage begins after a 1.8s title card
+    for c in clips:
+        t = round(t + (c.out_point - c.in_point) * 4.0, 3)
+        assert t in beatset
 
 
 def test_segments_land_on_beats_with_varied_lengths():

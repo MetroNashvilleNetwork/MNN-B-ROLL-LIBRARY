@@ -5,6 +5,7 @@ Varying the number of beats per segment is the single biggest defense against th
 
 from __future__ import annotations
 
+import bisect
 from typing import List, Sequence, Tuple
 
 
@@ -36,3 +37,50 @@ def beat_segment_endpoints(
         idx = end_idx
         pat_i += 1
     return segments
+
+
+def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
+                        start_offset: float = 0.0, target_hold: float = 1.8,
+                        pattern: Sequence[int] = ()) -> None:
+    """Resize each clip so its cut boundary lands on a music beat.
+
+    On-screen hold is a (varied) whole number of beats near ``target_hold``; the
+    source span is ``hold / factor`` (so a slow-mo clip at 4x with a 1.8s on-screen
+    hold uses a 0.45s span). The span is re-centered on the clip's existing
+    best-moment midpoint, so the moment is preserved while the cut snaps to the beat.
+
+    ``start_offset`` is the video time the first footage clip begins at (e.g. a title
+    card). Walks the REAL beat timestamps, so it tracks tempo drift. Mutates ``clips``.
+    """
+    beats = [float(b) for b in beats]
+    if len(beats) < 4 or not clips:
+        return
+    interval = (beats[-1] - beats[0]) / (len(beats) - 1)
+    if interval <= 0:
+        return
+    if not pattern:
+        base = max(2, round(target_hold / interval))        # beats/shot for ~target_hold
+        pattern = (base + 1, base, base + 1, base, base, base + 1)
+    cut_t = float(start_offset)
+    idx = bisect.bisect_right(beats, cut_t)                  # first beat after the start
+    for k, clip in enumerate(clips):
+        if idx >= len(beats):
+            break
+        if clip.retime == "slowmo":
+            f = slowmo_factor if (slowmo_factor and slowmo_factor > 0) else 2.5
+        else:
+            f = 1.0
+        want = pattern[k % len(pattern)] * interval          # desired on-screen seconds
+        j = idx
+        while j < len(beats) - 1 and (beats[j] - cut_t) < want:
+            j += 1
+        onscreen = beats[j] - cut_t
+        if onscreen <= 0:
+            break
+        span = round(onscreen / f, 3)
+        mid = (clip.in_point + clip.out_point) / 2.0
+        new_in = max(0.0, round(mid - span / 2.0, 3))
+        clip.in_point = new_in
+        clip.out_point = round(new_in + span, 3)
+        cut_t = beats[j]
+        idx = j + 1

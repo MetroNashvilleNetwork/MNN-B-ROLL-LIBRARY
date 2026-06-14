@@ -62,7 +62,8 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
                        cache: dict, proxy_dir, ffmpeg_path: str, client,
                        max_candidates: int = 40,
                        slowmo_ceiling: float = 0.85, slowmo_all: bool = False,
-                       slowmo_factor: float = 0.0) -> EDL:
+                       slowmo_factor: float = 0.0,
+                       beat_sync: bool = True, intro_offset: float = 0.0) -> EDL:
     """Director-driven EDL: rank clips, scout them (with correct profile), pass to Gemini."""
     music = analyze_music(music_path)
     ranked = []
@@ -90,10 +91,15 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
             motion_out=sc.motion_out,
             motion_strength=sc.motion_strength,
         ))
-    return compose_edit(theme, candidates, music, client,
-                        default_profile=default_profile, target_total=target_total,
-                        slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all,
-                        slowmo_factor=slowmo_factor)
+    edl = compose_edit(theme, candidates, music, client,
+                       default_profile=default_profile, target_total=target_total,
+                       slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all,
+                       slowmo_factor=slowmo_factor)
+    if beat_sync:
+        from .timing import snap_clips_to_beats
+        snap_clips_to_beats(edl.clips, music.beats, slowmo_factor=slowmo_factor,
+                            start_offset=intro_offset)
+    return edl
 
 
 def build_edl(clip_paths: Sequence[str], music_path: str, theme: str,
@@ -118,7 +124,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  final_quality: bool = True,
                  outro: str = "fade",
                  slowmo_all: bool = False,
-                 slowmo_factor: float = 0.0):
+                 slowmo_factor: float = 0.0,
+                 beat_sync: bool = True):
     """Run the full pipeline: scout → EDL → render two formats.
 
     Parameters
@@ -159,7 +166,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                                      default_profile, cache, pdir, ffmpeg,
                                      director_client, max_candidates,
                                      slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all,
-                                     slowmo_factor=slowmo_factor)
+                                     slowmo_factor=slowmo_factor,
+                                     beat_sync=beat_sync, intro_offset=(1.8 if brand else 0.0))
             errs = validate_edl(edl)
         except Exception:
             edl, errs = None, ["director failed"]
