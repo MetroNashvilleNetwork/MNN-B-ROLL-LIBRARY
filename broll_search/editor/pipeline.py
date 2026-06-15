@@ -75,6 +75,7 @@ def build_edl_director(clip_paths: Sequence[str], music_path: str, theme: str,
             ranked.append((p, sc))
     ranked.sort(key=lambda ps: ps[1].score, reverse=True)
     ranked = ranked[:max_candidates]
+    ranked.sort(key=lambda ps: ps[0])   # chronological: C#### filenames are capture order
     candidates = []
     for i, (p, sc) in enumerate(ranked):
         proxy = proxy_for(p, proxy_dir, ffmpeg_path=ffmpeg_path)

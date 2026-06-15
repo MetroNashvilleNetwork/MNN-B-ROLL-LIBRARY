@@ -84,8 +84,10 @@ def test_build_edl_director_caps_and_uses_model(monkeypatch, tmp_path):
         ["FX6_a.mov", "DJI_b.mp4", "FX6_c.mov"], "m.wav", "Parks",
         target_total=24, default_profile="rec709", cache={}, proxy_dir=tmp_path,
         ffmpeg_path="ffmpeg", client=fake, max_candidates=2)
-    assert len(fake.seen) == 2                       # cost cap: only top-2 scored clips sent
-    assert edl.clips[0].source == "FX6_a.mov"        # model picked candidate 0 (highest-scored)
+    assert len(fake.seen) == 2                       # cost cap: only top-2 SCORED clips sent
+    # top-2 by score are FX6_a + DJI_b; candidates are then ordered CHRONOLOGICALLY
+    # (by filename), so index 0 = "DJI_b.mp4" (D < F). Model picked candidate 0.
+    assert edl.clips[0].source == "DJI_b.mp4"
 
 
 # ---------------------------------------------------------------------------

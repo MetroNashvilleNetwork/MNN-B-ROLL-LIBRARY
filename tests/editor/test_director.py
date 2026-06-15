@@ -151,7 +151,7 @@ def test_schema_has_retime():
 def test_prompt_encodes_house_style():
     p = build_director_prompt("Parks", _cands(), _music(), 24).lower()
     assert "detail" in p or "macro" in p          # open on detail/prop
-    assert "accelerat" in p                        # accelerating pace
+    assert "build" in p                            # builds energy
     assert "hard cut" in p                         # hard cuts
     # cinematic wording: slow-mo is the dominant feel ("mainly", majority of runtime)
     assert "mainly" in p or "60" in p or "70" in p   # slow-mo bias language

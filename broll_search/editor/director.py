@@ -90,7 +90,7 @@ def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
         # full slow-mo: fewer, longer-held shots; source spans sized to the factor so
         # the slowed total still lands near target (factor-aware = right pacing at any speed).
         eff = slowmo_factor if slowmo_factor and slowmo_factor > 0 else 2.5
-        hold = 1.8                                   # on-screen seconds per shot (languid)
+        hold = 1.2                                   # on-screen seconds per shot (punchier)
         n_shots = max(6, round(target_total / hold))
         slowmo_cap = n_shots
         span = round(hold / eff, 2)                  # source seconds per shot
@@ -123,12 +123,13 @@ You are shown {len(candidates)} b-roll proxy clips (low-res previews), in this m
 
 Music: ~{bpm} BPM (one beat ~= {beat}s), {music.duration:.0f}s long.
 
-STRUCTURE / ARC — follow this exactly:
-1. OPEN on 1-2 CLOSE DETAIL or PROP macro shots (a branded object, award, sign, hands) held longer (~3s, then ~2.5s). Do NOT open on a person or a wide.
-2. First HUMAN moment — a candid reaction (~1.3s).
-3. ESTABLISHING WIDE (~0.9s) to set the scene.
-4. BUILD and ACCELERATE — alternate people, reactions, details, action; shots get progressively SHORTER toward the end (start ~2s, finish ~0.4–0.6s rapid-fire). Anticipate each beat: land the cut 1–2 frames BEFORE it.
-5. CLOSE on a slow-mo hero hold (a WIDE group or signature shot): pick a SHORT ~1.0–1.3s source span that plays ~2.5–3s in slow-motion so it breathes.
+SEQUENCING — order your chosen shots so the piece tells a clear story (timing is automatic — focus on ORDER and SELECTION, not durations):
+- The candidate clips are listed in CHRONOLOGICAL capture order (filenames C#### increase with time). Broadly follow that timeline so the recap moves from the start of the event toward the end.
+- OPEN with a scene-setting shot — an establishing WIDE or a strong DETAIL/signage shot — so the viewer instantly knows where we are. Do not open on a random mid-action close-up.
+- KEEP RELATED shots ADJACENT: consecutive shots of the same scene, group, or moment belong next to each other. Never jump randomly between unrelated areas — group, then move on.
+- BUILD energy gently: calmer, wider shots earlier; busier, more dynamic, more crowded shots later.
+- CLOSE on a strong HERO shot — a wide group or a signature moment — that feels like a deliberate ending.
+- BALANCED MIX across the whole piece: blend people & reactions, the scale of the room, and polished detail/branding shots. Do not cluster all of one kind together.
 
 ONE MOTION PER CLIP (selection rule):
 Each clip is tagged with a detected `motion`. When a clip has a real move (pan/tilt/push_in/pull_back), set your `in`/`out` INSIDE its [motion_in–motion_out] span so the cut contains that single clean move. For `static` clips pick the sharpest moment; a gentle push-in is added automatically. NEVER select a span that contains two different moves. NEVER pick a `complex` clip for slow-mo unless you also set stabilize=true.
@@ -144,10 +145,8 @@ Set stabilize=true for ANY handheld or `complex` clip — err strongly toward st
 EXPOSURE:
 Prefer well-exposed clips. You may keep a slightly over/under shot — exposure is corrected automatically. Just avoid badly clipped footage.
 
-PACING:
-- Shot durations should land on the beat; cut 1–2 frames EARLY for drive.
-- VARY shot lengths; never more than 3 same-length shots in a row.
-- Aim for about {n_shots} shots total, following the slow→fast acceleration arc above.
+SELECTION COUNT:
+- Pick about {n_shots} of the strongest shots total. The system automatically sets each shot's duration, slow-mo, and beat-alignment — you choose WHICH moments and in WHAT ORDER.
 
 RULES: ALL HARD CUTS (no dissolves). Prioritize emotional + story moments. Use only strong clips — skip soft, over/under-exposed, or repetitive ones. Use each source clip AT MOST ONCE (never reuse a clip unless you have fewer clips than shots), never place the same source in adjacent shots, and reserve a distinct strong clip for the closer. Avoid two near-identical framings of the same subject back-to-back.
 
