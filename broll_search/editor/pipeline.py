@@ -125,7 +125,8 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
                  outro: str = "fade",
                  slowmo_all: bool = False,
                  slowmo_factor: float = 0.0,
-                 beat_sync: bool = True):
+                 beat_sync: bool = True,
+                 formats: str = "both"):
     """Run the full pipeline: scout → EDL → render two formats.
 
     Parameters
@@ -199,15 +200,18 @@ def run_pipeline(clips_dir, music_dir, out_dir, theme,
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    # 8c — final_quality=True for both deliverable renders
-    vertical = render_format(edl, out / "vertical.mp4", 1080, 1920,
-                             lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
-                             brand_enabled=brand, font_path=font_path,
-                             look_strength=look_strength, final_quality=final_quality, outro=outro, slowmo_factor=slowmo_factor)
-    landscape = render_format(edl, out / "landscape.mp4", 1920, 1080,
-                              lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
-                              brand_enabled=brand, font_path=font_path,
-                              look_strength=look_strength, final_quality=final_quality, outro=outro, slowmo_factor=slowmo_factor)
+    # deliverable renders — formats: "both" | "landscape" | "vertical"
+    vertical = landscape = None
+    if formats in ("both", "vertical"):
+        vertical = render_format(edl, out / "vertical.mp4", 1080, 1920,
+                                 lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
+                                 brand_enabled=brand, font_path=font_path,
+                                 look_strength=look_strength, final_quality=final_quality, outro=outro, slowmo_factor=slowmo_factor)
+    if formats in ("both", "landscape"):
+        landscape = render_format(edl, out / "landscape.mp4", 1920, 1080,
+                                  lut_dir=lut_dir, ffmpeg_path=ffmpeg, tmpdir=out,
+                                  brand_enabled=brand, font_path=font_path,
+                                  look_strength=look_strength, final_quality=final_quality, outro=outro, slowmo_factor=slowmo_factor)
     (out / "edl.json").write_text(_edl_to_json(edl), encoding="utf-8")
     return RenderResult(edl=edl, vertical=vertical, landscape=landscape, out_dir=out)
 

@@ -45,6 +45,8 @@ def main(argv=None) -> int:
                         ">2.5 uses motion interpolation for smooth slower-than-optical slow-mo")
     p.add_argument("--no-beat-sync", action="store_true",
                    help="Disable snapping cut points to the music beat grid")
+    p.add_argument("--format", choices=["both", "landscape", "vertical"], default="both",
+                   help="Which deliverable(s) to render (default both)")
     p.add_argument("--preview", action="store_true",
                    help="Fast preview render (2160p prescale, for dev/Mac); omit for 4K-final quality")
     args = p.parse_args(argv)
@@ -73,11 +75,13 @@ def main(argv=None) -> int:
                            outro=args.outro,
                            slowmo_all=args.slowmo_all,
                            slowmo_factor=args.slowmo_factor,
-                           beat_sync=not args.no_beat_sync)
+                           beat_sync=not args.no_beat_sync,
+                           formats=args.format)
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print(f"Done. {len(res.edl.clips)} clips -> {res.vertical} and {res.landscape}")
+    outs = ", ".join(str(p) for p in (res.vertical, res.landscape) if p)
+    print(f"Done. {len(res.edl.clips)} clips -> {outs}")
     return 0
 
 
