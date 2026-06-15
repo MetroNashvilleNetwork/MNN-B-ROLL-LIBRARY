@@ -20,6 +20,20 @@ from .edl import EDL
 from .filters import clip_video_chain
 
 
+def _probe_duration(path, ffmpeg_path: str) -> float:
+    """Best-effort duration (seconds) of a media file via ffprobe next to ffmpeg."""
+    ff = Path(ffmpeg_path)
+    name = ff.name.replace("ffmpeg", "ffprobe")
+    probe = str(ff.with_name(name)) if name != ff.name else "ffprobe"
+    try:
+        r = subprocess.run([probe, "-v", "error", "-show_entries", "format=duration",
+                            "-of", "default=nokey=1:noprint_wrappers=1", str(path)],
+                           capture_output=True, text=True, timeout=30)
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+
 _STAB_MODE_CACHE: dict = {}
 
 
@@ -165,11 +179,18 @@ def render_format(
         # 3) mux loudness-normalized music; end at the shorter of video/music
         if outro == "fade":
             # Fade picture to black + fade music out over the final ~0.8s.
-            # Video length = sum of on-screen clip durations (+ opening title card).
-            vdur = sum(c.duration * (2.5 if c.retime == "slowmo" else 1.0)
-                       for c in edl.clips)
-            if brand_enabled and card_font:
-                vdur += 1.8   # opening title card
+            # Probe the concatenated video's TRUE length so the fade lands at the end
+            # regardless of the slow-mo factor (a hardcoded factor here black-tailed it).
+            vdur = _probe_duration(silent, ffmpeg_path)
+            if vdur <= 0.0:                     # fallback: compute from the EDL + real factor
+                tgt = 24000.0 / 1001.0
+                vdur = 1.8 if (brand_enabled and card_font) else 0.0
+                for c in edl.clips:
+                    if c.retime == "slowmo" and c.source_fps and c.source_fps > tgt * 1.1:
+                        f = slowmo_factor if (slowmo_factor and slowmo_factor > 0) else (c.source_fps / tgt)
+                        vdur += c.duration * f
+                    else:
+                        vdur += c.duration
             fade_d = 0.8
             fade_st = max(0.0, vdur - fade_d)
             _run([ffmpeg_path, "-y", "-i", str(silent), "-i", edl.music,
