@@ -13,6 +13,7 @@ from typing import List, Sequence
 
 from . import analysis
 from .edl import Clip, EDL
+from .filters import slowmo_playback_factor
 from .music import MusicInfo
 from .profiles import profile_for
 
@@ -82,7 +83,8 @@ def _candidate_manifest(candidates: Sequence[DirectorCandidate]) -> str:
 
 def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
                           music: MusicInfo, target_total: float = 28.0,
-                          slowmo_all: bool = False, slowmo_factor: float = 0.0) -> str:
+                          slowmo_all: bool = False, slowmo_factor: float = 0.0,
+                          pacing_style: str = "municipal_neutral") -> str:
     """7d — cinematic direction: premium + SMOOTH, one-motion, mostly-slowmo."""
     bpm = round(music.tempo)
     beat = round(60.0 / bpm, 2) if bpm else 0
@@ -104,19 +106,25 @@ def build_director_prompt(theme: str, candidates: Sequence[DirectorCandidate],
         )
     else:
         n_shots = max(6, round(target_total / 1.2))
-        slowmo_cap = math.ceil(n_shots * 0.85)
+        slowmo_cap = math.ceil(n_shots * 0.70)
         slowmo_block = (
-            "MAINLY SLOW-MO (this is the dominant feel):\n"
-            "The LARGE MAJORITY of this edit is slow-motion. Set retime=slowmo on almost every clip that "
-            "has any movement (a camera move pan/tilt/push_in/pull_back, OR subject/action motion), and on "
-            "every emotional/water/fabric/reveal/reaction beat. Slow-mo plays ~2.5× slower, so give each "
-            "slow-mo clip a SHORT (~0.8–1.4s) source span so the stretched result stays on pace. Aim for "
-            f"ROUGHLY 70–80% of total runtime in slow-mo (up to about {slowmo_cap} of the shots). The CLOSER "
-            "is slow-mo (a hero hold). Leave only a FEW shots `normal` — the rapid-fire accelerating beats "
-            "just before the closer — for contrast; do not make it ALL slow-mo. Do NOT slow-mo a `complex` "
-            "clip unless you also set stabilize=true."
+            "MAINLY SLOW-MO (moody, not a slideshow):\n"
+            "A strong majority of this edit is slow-motion — moody and cinematic, not every frame. "
+            "Set retime=slowmo on clips with camera moves (pan/tilt/push_in/pull_back) or emotional "
+            "beats. Slow-mo plays ~2.5× slower, so use SHORT (~0.8–1.4s) source spans. Aim for "
+            f"ROUGHLY 60–70% of runtime in slow-mo (up to about {slowmo_cap} shots). The CLOSER is "
+            "slow-mo (hero hold). Leave a FEW shots `normal` for contrast before the closer. Do NOT "
+            "slow-mo a `complex` clip unless you also set stabilize=true."
         )
-    return f"""You are a senior video editor cutting a {target_total:.0f}-second vertical (9:16) social recap on the theme "{theme}" in the house style of Metro Nashville Network. Cut a premium, cinematic, SMOOTH edit. Cuts may be fast but NOTHING may look shaky or chaotic — every shot must read as one clean, intentional camera move.
+    pacing_note = {
+        "cinematic_slow": "Pacing: cinematic and slow — favor longer holds and slow-mo.",
+        "social_punchy": "Pacing: social-forward — hook fast, still smooth; slightly shorter holds.",
+        "documentary": "Pacing: documentary — observational, fewer slow-mo shots, steady sequencing.",
+        "municipal_neutral": "Pacing: MNN house style — premium, smooth, balanced energy.",
+    }.get(pacing_style, "Pacing: MNN house style — premium, smooth, balanced energy.")
+    return f"""You are a senior video editor cutting a {target_total:.0f}-second landscape (16:9) social recap on the theme "{theme}" in the house style of Metro Nashville Network. Cut a premium, cinematic, SMOOTH edit. Cuts may be fast but NOTHING may look shaky or chaotic — every shot must read as one clean, intentional camera move.
+
+{pacing_note}
 
 You are shown {len(candidates)} b-roll proxy clips (low-res previews), in this manifest order:
 {_candidate_manifest(candidates)}
@@ -168,11 +176,13 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
                        target_total: float = 28.0,
                        slowmo_ceiling: float = 0.85,
                        slowmo_all: bool = False,
+                       slowmo_factor: float = 0.0,
                        shot_to_shot_easing: bool = True) -> EDL:
     """Build an EDL and apply the deterministic post-pass (§7e)."""
     by_index = {c.index: c for c in candidates}
     clips: List[Clip] = []
     clip_cands: List[DirectorCandidate] = []   # parallel list for §7e easing pass
+    used_sources: set[str] = set()
     cid = 1
 
     # ---- Build clips (model choices) -----------------------------------------
@@ -184,6 +194,8 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
         except (KeyError, TypeError, ValueError):
             continue
         if cand is None:
+            continue
+        if cand.path in used_sources:
             continue
         in_p = max(0.0, min(in_p, cand.duration))
         out_p = max(0.0, min(out_p, cand.duration))
@@ -215,6 +227,7 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
         )
         clips.append(clip)
         clip_cands.append(cand)
+        used_sources.add(cand.path)
         cid += 1
 
     # ---- Deterministic post-pass §7e ----------------------------------------
@@ -271,6 +284,11 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
         clip.exposure_adjust = round(adjust, 3)
         clip.highlight_clip = cand.exp_highlight_clip
 
+        # Strong stabilize default: handheld / any real movement / complex
+        if cand.motion_type == "complex" or cand.motion_type in REAL_MOVES \
+                or cand.motion_strength >= 2.0:
+            clip.stabilize = True
+
     # Step 4a1 — full slow-mo override: every eligible clip plays slow
     if slowmo_all:
         for clip in clips:
@@ -290,7 +308,8 @@ def parse_director_edl(data: dict, candidates: Sequence[DirectorCandidate],
         cap_s = target_total * slowmo_ceiling
         for clip in clips:
             if clip.retime == "slowmo":
-                on_screen = clip.duration * 2.5   # setpts=2.5*PTS
+                on_screen = clip.duration * slowmo_playback_factor(
+                    clip.source_fps or 0.0, slowmo_factor=slowmo_factor)
                 if clip.role != "closer" and total_slowmo_s + on_screen > cap_s:
                     clip.retime = "normal"
                 else:
@@ -313,6 +332,7 @@ def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
                               target_total: float = 28.0,
                               slowmo_ceiling: float = 0.85,
                               slowmo_all: bool = False,
+                              slowmo_factor: float = 0.0,
                               shot_to_shot_easing: bool = True) -> None:
     """Apply the same deterministic post-pass as parse_director_edl (§7e / §8b).
 
@@ -388,6 +408,10 @@ def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
         clip.exposure_adjust = round(adjust, 3)
         clip.highlight_clip = sc.exp_highlight_clip
 
+        if sc.motion_type == "complex" or sc.motion_type in REAL_MOVES \
+                or sc.motion_strength >= 2.0:
+            clip.stabilize = True
+
     # Step 4a1 — full slow-mo override: every eligible clip plays slow
     if slowmo_all:
         for clip in edl.clips:
@@ -406,7 +430,8 @@ def apply_cinematic_defaults(edl: EDL, scouts_by_path: dict,
         cap_s = target_total * slowmo_ceiling
         for clip in edl.clips:
             if clip.retime == "slowmo":
-                on_screen = clip.duration * 2.5
+                on_screen = clip.duration * slowmo_playback_factor(
+                    clip.source_fps or 0.0, slowmo_factor=slowmo_factor)
                 if clip.role != "closer" and total_slowmo_s + on_screen > cap_s:
                     clip.retime = "normal"
                 else:
@@ -433,12 +458,15 @@ class DirectorClient:
 def compose_edit(theme: str, candidates: Sequence[DirectorCandidate], music: MusicInfo,
                  client: DirectorClient, default_profile: str = "rec709",
                  target_total: float = 28.0,
-                 slowmo_ceiling: float = 0.85,
+                 slowmo_ceiling: float = 0.70,
                  slowmo_all: bool = False,
-                 slowmo_factor: float = 0.0) -> EDL:
+                 slowmo_factor: float = 0.0,
+                 pacing_style: str = "municipal_neutral") -> EDL:
     prompt = build_director_prompt(theme, candidates, music, target_total,
-                                   slowmo_all=slowmo_all, slowmo_factor=slowmo_factor)
+                                   slowmo_all=slowmo_all, slowmo_factor=slowmo_factor,
+                                   pacing_style=pacing_style)
     proxy_paths = [c.proxy_path for c in candidates]
     data = client.generate_edl(prompt, proxy_paths)
     return parse_director_edl(data, candidates, theme, music, default_profile, target_total,
-                              slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all)
+                              slowmo_ceiling=slowmo_ceiling, slowmo_all=slowmo_all,
+                              slowmo_factor=slowmo_factor)

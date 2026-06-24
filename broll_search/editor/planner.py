@@ -70,11 +70,17 @@ def plan_scored(
                     key=lambda s: s.score, reverse=True)
     segments = beat_segment_endpoints(music.beats, target_total, pattern)
     edl_clips: List[Clip] = []
+    used: set[str] = set()
+    rank_i = 0
     cid = 1
     for seg_start, seg_end in segments:
-        if cid - 1 >= len(ranked):
+        while rank_i < len(ranked) and ranked[rank_i].path in used:
+            rank_i += 1
+        if rank_i >= len(ranked):
             break
-        sc = ranked[cid - 1]
+        sc = ranked[rank_i]
+        rank_i += 1
+        used.add(sc.path)
         seg_dur = seg_end - seg_start
         window = sc.best_out - sc.best_in
         in_point = round(sc.best_in, 3)

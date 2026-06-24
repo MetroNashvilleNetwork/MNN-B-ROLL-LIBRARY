@@ -67,6 +67,7 @@ class MediaEngine:
     ffprobe: Optional[str] = field(init=False, default=None)
     _locks: dict = field(init=False, default_factory=dict)
     _locks_guard: threading.Lock = field(init=False, default_factory=threading.Lock)
+    _locks_max: int = 256
     _gen_sem: threading.Semaphore = field(init=False, default=None)
 
     def __post_init__(self) -> None:
@@ -95,9 +96,20 @@ class MediaEngine:
         with self._locks_guard:
             lock = self._locks.get(key)
             if lock is None:
+                if len(self._locks) >= self._locks_max:
+                    stale = [k for k, lk in self._locks.items() if not lk.locked()]
+                    for k in stale[: max(1, len(stale) // 2)]:
+                        self._locks.pop(k, None)
                 lock = threading.Lock()
                 self._locks[key] = lock
             return lock
+
+    def _maybe_prune_lock(self, key: str, lock: threading.Lock) -> None:
+        if lock.locked():
+            return
+        with self._locks_guard:
+            if self._locks.get(key) is lock and not lock.locked():
+                self._locks.pop(key, None)
 
     # -- ffmpeg runner ----------------------------------------------------
 
@@ -123,7 +135,9 @@ class MediaEngine:
             return out
         if not os.path.exists(src):
             return None
-        with self._lock_for(key):
+        lock = self._lock_for(key)
+        lock.acquire()
+        try:
             if out.exists() and out.stat().st_size > 0:
                 return out
             w = self.preview_max_width
@@ -143,6 +157,9 @@ class MediaEngine:
                         )
                         if ok and out.exists() and out.stat().st_size > 0:
                             return out
+        finally:
+            lock.release()
+            self._maybe_prune_lock(key, lock)
         return None
 
     # -- previews ---------------------------------------------------------
@@ -157,7 +174,9 @@ class MediaEngine:
             return out
         if not os.path.exists(src):
             return None
-        with self._lock_for(key):
+        lock = self._lock_for(key)
+        lock.acquire()
+        try:
             if out.exists() and out.stat().st_size > 0:
                 return out
             tmp = out.with_suffix(".partial.mp4")
@@ -195,6 +214,9 @@ class MediaEngine:
                     tmp.unlink()
                 except OSError:
                     pass
+        finally:
+            lock.release()
+            self._maybe_prune_lock(key, lock)
         return None
 
     # -- placeholder ------------------------------------------------------

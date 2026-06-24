@@ -83,8 +83,11 @@ def _cmd_index(args: argparse.Namespace) -> int:
     from broll_search.indexer import run_index
 
     print(f"Indexing into {config.database_abspath} …")
-    result = run_index(config, log=lambda m: print(f"  {m}"), full_rescan=args.full)
+    full_rescan = args.full or args.force
+    result = run_index(config, log=lambda m: print(f"  {m}"), full_rescan=full_rescan)
     print(result.summary())
+    if result.errors:
+        return 1
     return 0
 
 

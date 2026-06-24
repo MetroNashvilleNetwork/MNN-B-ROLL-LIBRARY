@@ -10,7 +10,8 @@ def _slowmo_clip(i, in_p=2.0, out_p=2.5):
 def test_snap_lands_every_cut_on_a_beat():
     beats = [round(0.5 * i, 3) for i in range(40)]   # 120 BPM grid
     clips = [_slowmo_clip(i) for i in range(1, 6)]
-    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, start_offset=0.0)
+    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, start_offset=0.0,
+                        off_beat_fraction=0.0)
     beatset = set(round(b, 3) for b in beats)
     t = 0.0
     for c in clips:
@@ -22,14 +23,15 @@ def test_snap_lands_every_cut_on_a_beat():
 def test_snap_preserves_best_moment_center():
     beats = [round(0.5 * i, 3) for i in range(40)]
     c = _slowmo_clip(1, in_p=3.0, out_p=3.4)          # best-moment midpoint = 3.2
-    snap_clips_to_beats([c], beats, slowmo_factor=4.0)
+    snap_clips_to_beats([c], beats, slowmo_factor=4.0, off_beat_fraction=0.0)
     assert abs((c.in_point + c.out_point) / 2.0 - 3.2) < 0.05
 
 
 def test_snap_truncates_to_target_total():
     beats = [round(0.5 * i, 3) for i in range(80)]   # 0..39.5s of beats
     clips = [_slowmo_clip(i) for i in range(1, 30)]  # 29 clips — uncapped would run ~50s+
-    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, target_total=12.0)
+    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, target_total=12.0,
+                        off_beat_fraction=0.0)
     runtime = sum((c.out_point - c.in_point) * 4.0 for c in clips)
     assert len(clips) < 29 and runtime <= 14.0    # capped near the 12s ceiling
 
@@ -37,7 +39,8 @@ def test_snap_truncates_to_target_total():
 def test_snap_respects_start_offset():
     beats = [round(0.5 * i, 3) for i in range(40)]
     clips = [_slowmo_clip(i) for i in range(1, 4)]
-    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, start_offset=1.8)
+    snap_clips_to_beats(clips, beats, slowmo_factor=4.0, start_offset=1.8,
+                        off_beat_fraction=0.0)
     beatset = set(round(b, 3) for b in beats)
     t = 1.8   # footage begins after a 1.8s title card
     for c in clips:
@@ -63,3 +66,11 @@ def test_segments_land_on_beats_with_varied_lengths():
 
 def test_handles_too_few_beats():
     assert beat_segment_endpoints([0.0], target_total=8.0, pattern=(4,)) == []
+
+
+def test_snap_clamps_out_point_to_source_duration():
+    beats = [round(0.5 * i, 3) for i in range(40)]
+    c = Clip(id=1, source="short.mov", in_point=0.0, out_point=0.5,
+             color_profile="rec709", retime="normal")
+    snap_clips_to_beats([c], beats, slowmo_factor=4.0, source_durations=[1.0])
+    assert c.out_point <= 1.0

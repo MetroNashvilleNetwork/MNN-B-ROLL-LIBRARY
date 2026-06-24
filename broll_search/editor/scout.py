@@ -123,7 +123,10 @@ def scout_clip(path: str, window: float = 1.5, n: int = 12,
 # --- caching -------------------------------------------------------------
 
 def _cache_key(path: str) -> str:
-    st = os.stat(path)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "missing"
     return f"{st.st_size}:{st.st_mtime_ns}"
 
 
@@ -154,4 +157,8 @@ def load_cache(cache_path) -> dict:
 
 
 def save_cache(cache_path, cache: dict) -> None:
-    Path(cache_path).write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    p = Path(cache_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    tmp.replace(p)

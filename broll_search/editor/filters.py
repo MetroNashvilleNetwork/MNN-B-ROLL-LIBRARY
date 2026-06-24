@@ -64,6 +64,18 @@ def _fps_to_float(fps) -> float:
         return 0.0
 
 
+def slowmo_playback_factor(source_fps: float, target_fps: str = "24000/1001",
+                           slowmo_factor: float = 0.0) -> float:
+    """On-screen stretch for slow-mo (1.0 = no stretch; matches retime_filter)."""
+    tgt = _fps_to_float(target_fps)
+    if not source_fps or not tgt or source_fps <= tgt * 1.1:
+        return 1.0
+    optical = source_fps / tgt
+    if slowmo_factor and slowmo_factor > 0:
+        return slowmo_factor
+    return optical
+
+
 def retime_filter(retime: str, source_fps: float, target_fps: str = "24000/1001",
                   slowmo_factor: float = 0.0) -> str:
     """Return a setpts slow-motion filter (plus motion interpolation when needed),
@@ -75,11 +87,11 @@ def retime_filter(retime: str, source_fps: float, target_fps: str = "24000/1001"
     (motion-compensated) synthesizes the in-between frames to keep it smooth."""
     if retime != "slowmo":
         return ""
-    tgt = _fps_to_float(target_fps)
-    if not source_fps or not tgt or source_fps <= tgt * 1.1:
+    factor = round(slowmo_playback_factor(source_fps, target_fps, slowmo_factor), 4)
+    if factor <= 1.0:
         return ""
-    optical = source_fps / tgt
-    factor = round(slowmo_factor if slowmo_factor and slowmo_factor > 0 else optical, 4)
+    tgt = _fps_to_float(target_fps)
+    optical = source_fps / tgt if (source_fps and tgt) else factor
     setpts = f"setpts={factor}*PTS"
     if factor > optical + 0.05:        # slower than frame-exact -> interpolate
         return (f"{setpts},minterpolate=fps={target_fps}:mi_mode=mci:"

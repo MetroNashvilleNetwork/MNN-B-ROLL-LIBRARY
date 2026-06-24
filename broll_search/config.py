@@ -76,6 +76,9 @@ class Config:
     web_port: int = 8765
     preview_max_width: int = 640
     preview_max_seconds: int = 60
+    server_footage_root: str = ""
+    network_footage_root: str = ""
+    share_token: str = ""   # optional; when set, LAN share mode requires ?token= on first visit
     validation: ValidationConfig = field(default_factory=ValidationConfig)
 
     # Absolute path the config was loaded from (for messages / saving).
@@ -117,6 +120,29 @@ class Config:
                 continue
             paths.append(Path(str(raw).strip()))
         return paths
+
+    def is_path_under_footage_roots(self, path: str) -> bool:
+        """True when ``path`` resolves under a configured footage root."""
+        if not path or not str(path).strip():
+            return False
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            return False
+        roots = self.configured_footage_paths()
+        if not roots:
+            return True
+        for root in roots:
+            try:
+                root_res = root.resolve()
+            except OSError:
+                root_res = root
+            try:
+                resolved.relative_to(root_res)
+                return True
+            except ValueError:
+                continue
+        return False
 
 
 # Common example/placeholder values we should not treat as real drives.
@@ -242,6 +268,9 @@ def _build_config(raw: dict[str, Any], source: Path) -> Config:
         web_port=int(raw.get("web_port", 8765)),
         preview_max_width=int(raw.get("preview_max_width", 640)),
         preview_max_seconds=int(raw.get("preview_max_seconds", 60)),
+        server_footage_root=str(raw.get("server_footage_root", "")),
+        network_footage_root=str(raw.get("network_footage_root", "")),
+        share_token=str(raw.get("share_token", "")),
         validation=validation,
         source_path=source,
     )

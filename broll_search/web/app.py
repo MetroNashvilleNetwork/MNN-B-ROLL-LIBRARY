@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory
 
 from .. import __app_name__, database as db
 from ..config import Config
@@ -23,23 +23,36 @@ from . import categories as cats
 from . import doctor as doctor_mod
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-SERVER_FOOTAGE_ROOT = r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
-NETWORK_FOOTAGE_ROOT = r"\\smb.data.nashville.org\MNNArchive\2026 Metro Nashville Archive B-Roll Footage"
+DEFAULT_SERVER_FOOTAGE_ROOT = (
+    r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov"
+    r"\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
+)
+DEFAULT_NETWORK_FOOTAGE_ROOT = (
+    r"\\smb.data.nashville.org\MNNArchive\2026 Metro Nashville Archive B-Roll Footage"
+)
 
 
-def _network_path(path: str) -> str:
+def _network_path(path: str, config: Config) -> str:
+    server_root = (getattr(config, "server_footage_root", None)
+                   or DEFAULT_SERVER_FOOTAGE_ROOT)
+    network_root = (getattr(config, "network_footage_root", None)
+                    or DEFAULT_NETWORK_FOOTAGE_ROOT)
+    if server_root:
+        server_root = str(server_root)
+    if network_root:
+        network_root = str(network_root)
     norm_path = os.path.normcase(os.path.normpath(path))
-    norm_root = os.path.normcase(os.path.normpath(SERVER_FOOTAGE_ROOT))
+    norm_root = os.path.normcase(os.path.normpath(server_root))
     if norm_path == norm_root:
-        return NETWORK_FOOTAGE_ROOT
+        return network_root
     if norm_path.startswith(norm_root + os.sep):
-        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(SERVER_FOOTAGE_ROOT))
-        return os.path.normpath(os.path.join(NETWORK_FOOTAGE_ROOT, rel))
+        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(server_root))
+        return os.path.normpath(os.path.join(network_root, rel))
     return path
 
 
-def _row_to_dict(r) -> dict:
-    network_path = _network_path(r["path"])
+def _row_to_dict(r, config: Config) -> dict:
+    network_path = _network_path(r["path"], config)
     keys = r.keys()
     ai_desc = r["ai_description"] if "ai_description" in keys else None
     ai_tags = r["ai_tags"] if "ai_tags" in keys else None
@@ -74,12 +87,26 @@ class _IndexState:
         self.lock = threading.Lock()
 
 
+def _set_index_state(index_state: _IndexState, *, running: bool | None = None,
+                     message: str | None = None) -> None:
+    with index_state.lock:
+        if running is not None:
+            index_state.running = running
+        if message is not None:
+            index_state.message = message
+
+
 def _categorized_ids(con) -> set:
     """Set of file ids that match at least one subject category."""
     expr = cats.all_categories_fts()
     if not expr:
         return set()
     return {r["id"] for r in db.search(con, fts_expr=expr, limit=100000)}
+
+
+def _footage_path_ok(config: Config, path: str) -> bool:
+    """Only serve files that live under configured footage roots."""
+    return config.is_path_under_footage_roots(path)
 
 
 def create_app(config: Config) -> Flask:
@@ -92,6 +119,36 @@ def create_app(config: Config) -> Flask:
         preview_max_seconds=config.preview_max_seconds,
     )
     index_state = _IndexState()
+
+    @app.before_request
+    def _lan_share_guard():
+        if not app.config.get("LAN_SHARE"):
+            return None
+        token = (app.config.get("SHARE_TOKEN") or "").strip()
+        if not token:
+            return None
+        remote = request.remote_addr or ""
+        if remote in ("127.0.0.1", "::1"):
+            return None
+        if request.cookies.get("broll_share") == token:
+            return None
+        if request.args.get("token") == token:
+            g.share_set_cookie = True
+            return None
+        return Response(
+            "Unauthorized. Open the gallery using the shared link that includes ?token=…",
+            status=401,
+            mimetype="text/plain",
+        )
+
+    @app.after_request
+    def _share_set_cookie(resp):
+        if getattr(g, "share_set_cookie", False):
+            token = (app.config.get("SHARE_TOKEN") or "").strip()
+            if token:
+                resp.set_cookie(
+                    "broll_share", token, httponly=True, samesite="Lax", max_age=86400 * 30)
+        return resp
 
     # Create the schema once at startup (the only place that may write).
     db.connect(config.database_abspath, ensure=True).close()
@@ -152,13 +209,27 @@ def create_app(config: Config) -> Flask:
                 })
             # Catch-all: clips that match no category at all ("More B-Roll").
             categorized = _categorized_ids(con)
-            uncat = [r for r in db.search(con, sort="modified", limit=100000)
-                     if r["id"] not in categorized]
-            if uncat:
-                out.append({
-                    "key": cats.UNCATEGORIZED_KEY, "label": cats.UNCATEGORIZED_LABEL,
-                    "count": len(uncat), "sample_id": uncat[0]["id"],
-                })
+            if categorized:
+                exclude = sorted(categorized)
+                uncat_count = db.search_count(con, exclude_ids=exclude)
+                if uncat_count:
+                    sample = db.search(con, exclude_ids=exclude, sort="modified", limit=1)
+                    out.append({
+                        "key": cats.UNCATEGORIZED_KEY,
+                        "label": cats.UNCATEGORIZED_LABEL,
+                        "count": uncat_count,
+                        "sample_id": sample[0]["id"] if sample else None,
+                    })
+            else:
+                total = db.file_count(con)
+                if total:
+                    sample = db.search(con, sort="modified", limit=1)
+                    out.append({
+                        "key": cats.UNCATEGORIZED_KEY,
+                        "label": cats.UNCATEGORIZED_LABEL,
+                        "count": total,
+                        "sample_id": sample[0]["id"] if sample else None,
+                    })
         finally:
             con.close()
         return jsonify({"categories": out})
@@ -207,7 +278,7 @@ def create_app(config: Config) -> Flask:
             con.close()
         return jsonify({
             "total": total, "offset": offset, "limit": limit,
-            "items": [_row_to_dict(r) for r in rows],
+            "items": [_row_to_dict(r, config) for r in rows],
         })
 
     @app.route("/api/clip/<int:file_id>")
@@ -219,7 +290,7 @@ def create_app(config: Config) -> Flask:
             con.close()
         if not row:
             return jsonify({"error": "not found"}), 404
-        d = _row_to_dict(row)
+        d = _row_to_dict(row, config)
         d["has_preview"] = media.has_ffmpeg
         return jsonify(d)
 
@@ -232,6 +303,8 @@ def create_app(config: Config) -> Flask:
             con.close()
         if not row:
             return Response(status=404)
+        if not _footage_path_ok(config, row["path"]):
+            return Response(status=403)
         p = media.thumbnail_path(row["path"], row["mtime_ns"])
         if p and p.exists():
             return send_file(str(p), mimetype="image/jpeg", conditional=True)
@@ -250,6 +323,8 @@ def create_app(config: Config) -> Flask:
             con.close()
         if not row:
             return Response(status=404)
+        if not _footage_path_ok(config, row["path"]):
+            return Response(status=403)
         p = media.preview_path(row["path"], row["mtime_ns"])
         if p and p.exists():
             return send_file(str(p), mimetype="video/mp4", conditional=True)
@@ -267,6 +342,8 @@ def create_app(config: Config) -> Flask:
         path = row["path"]
         if not path or not os.path.exists(path):
             return Response(status=404)
+        if not _footage_path_ok(config, path):
+            return Response(status=403)
         return send_file(
             path,
             as_attachment=True,
@@ -284,7 +361,7 @@ def create_app(config: Config) -> Flask:
             con.close()
         if not row:
             return jsonify({"ok": False, "error": "not found"}), 404
-        network_path = _network_path(row["path"])
+        network_path = _network_path(row["path"], config)
         return jsonify({
             "ok": True,
             "path": network_path,
@@ -299,9 +376,12 @@ def create_app(config: Config) -> Flask:
             last = db.get_meta(con, "last_index_completed_at")
         finally:
             con.close()
+        with index_state.lock:
+            indexing = index_state.running
+            message = index_state.message
         return jsonify({
-            "indexing": index_state.running,
-            "message": index_state.message,
+            "indexing": indexing,
+            "message": message,
             "count": count,
             "last_index": last,
         })
@@ -335,14 +415,17 @@ def create_app(config: Config) -> Flask:
 
         def worker():
             try:
-                indexer.run_index(
+                result = indexer.run_index(
                     config,
-                    log=lambda m: setattr(index_state, "message", m),
+                    log=lambda m: _set_index_state(index_state, message=m),
                     full_rescan=full,
                 )
+                if result.skipped_duplicate:
+                    _set_index_state(index_state, message="Skipped (index already running)")
+                else:
+                    _set_index_state(index_state, message="Done")
             finally:
-                index_state.running = False
-                index_state.message = "Done"
+                _set_index_state(index_state, running=False)
 
         threading.Thread(target=worker, daemon=True).start()
         return jsonify({"ok": True})
@@ -378,9 +461,15 @@ def run_web(config: Config, *, share: bool = False, port: Optional[int] = None,
     port = port or config.web_port
     host = "0.0.0.0" if share else "127.0.0.1"
     app = create_app(config)
+    app.config["LAN_SHARE"] = share
+    app.config["SHARE_TOKEN"] = (config.share_token or "").strip()
 
     if scheduler.is_index_due(config):
-        threading.Thread(target=lambda: indexer.run_index(config), daemon=True).start()
+        threading.Thread(
+            target=lambda: indexer.run_index(
+                config, log=lambda m: print(f"  [index] {m}")),
+            daemon=True,
+        ).start()
 
     local_url = f"http://127.0.0.1:{port}/"
     print(f"\n{__app_name__}")
@@ -388,12 +477,17 @@ def run_web(config: Config, *, share: bool = False, port: Optional[int] = None,
     if share:
         ip = _lan_ip()
         if ip:
-            print(f"  Share with your manager: http://{ip}:{port}/")
+            lan_url = f"http://{ip}:{port}/"
+            if app.config["SHARE_TOKEN"]:
+                lan_url += f"?token={app.config['SHARE_TOKEN']}"
+            print(f"  Share with your manager: {lan_url}")
             print("  (They must be on the same MNN network. Send them that link.)")
         else:
             print("  (Could not determine this computer's network address.)")
-        print("  Note: sharing exposes the gallery to your local network while this")
-        print("  window stays open. Close this window to stop sharing.")
+        if not app.config["SHARE_TOKEN"]:
+            print("  Security note: anyone on the LAN can browse while this is running.")
+            print("  Set \"share_token\" in config.json to require ?token= for remote viewers.")
+        print("  Close this window to stop sharing.")
     print("  Press Ctrl+C in this window to stop.\n")
 
     if open_browser:

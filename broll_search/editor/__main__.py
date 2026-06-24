@@ -5,18 +5,20 @@ from __future__ import annotations
 import argparse
 import sys
 
+from .gemini_client import make_gemini_client
 from .pipeline import run_pipeline
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="broll_search.editor",
-                                description="MNN Auto-Editor (Phase 1, offline)")
+                                description="MNN Auto-Editor (offline + optional Gemini)")
     p.add_argument("--clips", default="dev_media/clips", help="Folder of source clips")
-    p.add_argument("--music", default="dev_media/music", help="Folder with a music track")
+    p.add_argument("--music", default="dev_media/music", help="Folder with music tracks")
     p.add_argument("--out", default="output/latest", help="Output folder")
-    p.add_argument("--theme", default="MNN B-Roll", help="Theme label for the video")
-    p.add_argument("--duration", type=float, default=28.0, help="Target length (s)")
-    p.add_argument("--profile", default="rec709",
+    p.add_argument("--theme", default="auto",
+                   help='Theme label, or "auto" for AI inference from footage')
+    p.add_argument("--duration", type=float, default=35.0, help="Target length (s)")
+    p.add_argument("--profile", default="sony_slog3",
                    choices=["rec709", "sony_slog3", "dji_dlogm"],
                    help="Default color profile when not inferable from filename")
     p.add_argument("--lut-dir", default="luts")
@@ -24,18 +26,19 @@ def main(argv=None) -> int:
     p.add_argument("--ffprobe", default="ffprobe")
     p.add_argument("--no-scored", action="store_true",
                    help="Use filename order instead of quality scouting")
-    p.add_argument("--director", action="store_true",
-                   help="Use the Gemini AI director (needs GEMINI_API_KEY); falls back to scoring if unavailable")
+    p.add_argument("--no-director", action="store_true",
+                   help="Disable Gemini director (quality scoring only)")
+    p.add_argument("--no-auto-curate", action="store_true",
+                   help="Disable AI theme/music selection (first track, manual theme)")
     p.add_argument("--no-brand", action="store_true", help="Skip the MNN title/outro cards")
-    p.add_argument("--look-strength", type=float, default=0.4,
+    p.add_argument("--look-strength", type=float, default=0.3,
                    help="House-look intensity 0..1 (low = cleaner/more natural)")
-    # 8d — cinematic escape-hatch flags (all default to the cinematic-ON behaviour)
     p.add_argument("--no-stabilize", action="store_true",
                    help="Disable per-clip stabilization (overrides cinematic default of ON)")
     p.add_argument("--no-exposure", action="store_true",
                    help="Disable per-clip exposure correction (overrides cinematic default of ON)")
-    p.add_argument("--slowmo-ceiling", type=float, default=0.85,
-                   help="Max fraction of total runtime that may be slow-mo (default 0.85)")
+    p.add_argument("--slowmo-ceiling", type=float, default=0.70,
+                   help="Max fraction of total runtime that may be slow-mo (default 0.70)")
     p.add_argument("--outro", choices=["card", "fade", "none"], default="fade",
                    help="Ending: 'fade' = fade to black (default), 'card' = branded outro card, 'none' = hard cut")
     p.add_argument("--slowmo-all", action="store_true",
@@ -45,38 +48,45 @@ def main(argv=None) -> int:
                         ">2.5 uses motion interpolation for smooth slower-than-optical slow-mo")
     p.add_argument("--no-beat-sync", action="store_true",
                    help="Disable snapping cut points to the music beat grid")
-    p.add_argument("--format", choices=["both", "landscape", "vertical"], default="both",
-                   help="Which deliverable(s) to render (default both)")
+    p.add_argument("--format", choices=["both", "landscape", "vertical"], default="landscape",
+                   help="Which deliverable(s) to render (default landscape)")
     p.add_argument("--preview", action="store_true",
                    help="Fast preview render (2160p prescale, for dev/Mac); omit for 4K-final quality")
     args = p.parse_args(argv)
 
     director_client = None
-    if args.director:
-        from .gemini_client import make_gemini_client
+    if not args.no_director:
         director_client = make_gemini_client()
         if director_client is None:
-            print("Note: --director set but no Gemini client (set GEMINI_API_KEY). "
-                  "Falling back to quality scoring.", file=sys.stderr)
+            print("Note: Gemini director unavailable (set GEMINI_API_KEY). "
+                  "Using quality scoring.", file=sys.stderr)
+
+    curator_client = None
+    if not args.no_auto_curate:
+        curator_client = director_client or make_gemini_client()
 
     try:
-        res = run_pipeline(args.clips, args.music, args.out, args.theme,
-                           target_total=args.duration, default_profile=args.profile,
-                           lut_dir=args.lut_dir, ffmpeg_path=args.ffmpeg,
-                           ffprobe_path=args.ffprobe,
-                           scored=not args.no_scored,
-                           director_client=director_client,
-                           brand=not args.no_brand,
-                           look_strength=args.look_strength,
-                           stabilize=not args.no_stabilize,
-                           exposure=not args.no_exposure,
-                           slowmo_ceiling=args.slowmo_ceiling,
-                           final_quality=not args.preview,
-                           outro=args.outro,
-                           slowmo_all=args.slowmo_all,
-                           slowmo_factor=args.slowmo_factor,
-                           beat_sync=not args.no_beat_sync,
-                           formats=args.format)
+        res = run_pipeline(
+            args.clips, args.music, args.out, args.theme,
+            target_total=args.duration, default_profile=args.profile,
+            lut_dir=args.lut_dir, ffmpeg_path=args.ffmpeg,
+            ffprobe_path=args.ffprobe,
+            scored=not args.no_scored,
+            director_client=director_client,
+            curator_client=curator_client,
+            auto_curate=not args.no_auto_curate,
+            brand=not args.no_brand,
+            look_strength=args.look_strength,
+            stabilize=not args.no_stabilize,
+            exposure=not args.no_exposure,
+            slowmo_ceiling=args.slowmo_ceiling,
+            final_quality=not args.preview,
+            outro=args.outro,
+            slowmo_all=args.slowmo_all,
+            slowmo_factor=args.slowmo_factor,
+            beat_sync=not args.no_beat_sync,
+            formats=args.format,
+        )
     except (RuntimeError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

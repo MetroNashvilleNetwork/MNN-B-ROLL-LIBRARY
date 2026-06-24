@@ -91,6 +91,16 @@ def test_parse_builds_edl_in_timeline_order():
     assert edl.clips[1].color_profile == "sony_slog3"
 
 
+def test_parse_skips_duplicate_source():
+    data = {"timeline": [
+        {"clip_index": 0, "in": 0, "out": 2, "role": "hook"},
+        {"clip_index": 0, "in": 3, "out": 5, "role": "body"},
+        {"clip_index": 1, "in": 0, "out": 2, "role": "closer"},
+    ]}
+    edl = parse_director_edl(data, _cands(), "t", _music())
+    assert [c.source for c in edl.clips] == ["FX6_a.mov", "DJI_b.mp4"]
+
+
 def test_parse_skips_invalid_entries():
     data = {"timeline": [
         {"clip_index": 9, "in": 0, "out": 1, "role": "hook"},   # index out of range
@@ -223,9 +233,9 @@ def test_prompt_slowmo_cap():
     """The prompt should include a per-count slow-mo cap derived from n_shots."""
     import math
     p = build_director_prompt("Parks", _cands(), _music(), 24)
-    # n_shots = max(6, round(24/1.2)) = 20, slowmo_cap = ceil(20*0.85) = 17
+    # n_shots = max(6, round(24/1.2)) = 20, slowmo_cap = ceil(20*0.70) = 14
     n_shots = max(6, round(24 / 1.2))
-    slowmo_cap = math.ceil(n_shots * 0.85)
+    slowmo_cap = math.ceil(n_shots * 0.70)
     assert str(slowmo_cap) in p    # the cap number appears in the prompt
 
 

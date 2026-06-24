@@ -50,8 +50,8 @@ set /p FOOTAGE=Footage folder (e.g. X:\2026 Metro Nashville Archive B-Roll Foota
 set /p MUSIC=Music folder (a folder of tracks you have the rights to use):
 set /p PROFILE=Camera profile - sony_slog3 / dji_dlogm / rec709 [sony_slog3]:
 if "!PROFILE!"=="" set "PROFILE=sony_slog3"
-set /p THEME=Theme label for the videos [MNN B-Roll]:
-if "!THEME!"=="" set "THEME=MNN B-Roll"
+set /p THEME=Theme label for the videos, or "auto" for AI [auto]:
+if "!THEME!"=="" set "THEME=auto"
 
 > "_autoedit_settings.bat" (
     echo @echo off
@@ -60,7 +60,7 @@ if "!THEME!"=="" set "THEME=MNN B-Roll"
     echo set "OUTPUT=%~dp0output"
     echo set "THEME=!THEME!"
     echo set "PROFILE=!PROFILE!"
-    echo set "DURATION=24"
+    echo set "DURATION=35"
 )
 echo   Saved your settings.
 

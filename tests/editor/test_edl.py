@@ -1,4 +1,4 @@
-from broll_search.editor.edl import Clip, EDL, validate_edl
+from broll_search.editor.edl import Clip, EDL, clamp_clip_to_source, dedupe_edl_sources, validate_edl
 
 
 def _clip(**kw):
@@ -69,3 +69,38 @@ def test_clip_new_fields_all_motion_types():
     for mt in ("pan", "tilt", "push_in", "pull_back", "static", "complex"):
         c = _clip(motion_type=mt)
         assert c.motion_type == mt
+
+
+def test_validate_edl_flags_out_point_past_source():
+    c = _clip(source="/foo/bar.mov", in_point=0.0, out_point=12.0)
+    edl = EDL(theme="parks", music="m.wav", clips=[c])
+    errs = validate_edl(edl, source_durations={"/foo/bar.mov": 5.0})
+    assert any("exceeds source" in e for e in errs)
+
+
+def test_clamp_clip_to_source_recenters_when_past_eof():
+    c = _clip(in_point=8.0, out_point=12.0)
+    clamp_clip_to_source(c, 10.0)
+    assert c.in_point >= 0.0
+    assert c.out_point <= 10.0
+    assert abs(c.out_point - c.in_point - 4.0) < 0.01
+
+
+def test_dedupe_edl_sources_keeps_first():
+    edl = EDL(
+        theme="t", music="m.wav",
+        clips=[_clip(id=1, source="a.mov"), _clip(id=2, source="b.mov"),
+               _clip(id=3, source="a.mov")],
+    )
+    removed = dedupe_edl_sources(edl)
+    assert removed == 1
+    assert [c.source for c in edl.clips] == ["a.mov", "b.mov"]
+    assert [c.id for c in edl.clips] == [1, 2]
+
+
+def test_validate_edl_rejects_duplicate_sources():
+    edl = EDL(
+        theme="t", music="m.wav",
+        clips=[_clip(id=1, source="a.mov"), _clip(id=2, source="a.mov")],
+    )
+    assert any("reuses" in e for e in validate_edl(edl))

@@ -156,6 +156,11 @@ def _make_edl_with_fields():
 
 def _patch_run_pipeline_env(monkeypatch, tmp_path, edl):
     """Common monkeypatches to make run_pipeline fast/headless (no ffmpeg)."""
+    beats = [i * 0.5 for i in range(33)]
+    monkeypatch.setattr(
+        pipeline, "analyze_music",
+        lambda p: MusicInfo(p, 16.0, 120.0, beats),
+    )
     monkeypatch.setattr(pipeline, "build_edl_scored", lambda *a, **kw: edl)
     monkeypatch.setattr(pipeline, "find_media",
                         lambda folder, exts: (
@@ -166,7 +171,7 @@ def _patch_run_pipeline_env(monkeypatch, tmp_path, edl):
     monkeypatch.setattr(pipeline, "_resolve_tool", lambda t, name: t)
     monkeypatch.setattr(pipeline, "load_cache", lambda p: {})
     monkeypatch.setattr(pipeline, "save_cache", lambda p, c: None)
-    monkeypatch.setattr(pipeline, "validate_edl", lambda e: [])
+    monkeypatch.setattr(pipeline, "validate_edl", lambda e, source_durations=None: [])
     monkeypatch.setattr(pipeline, "render_format",
                         lambda *a, **kw: tmp_path / "out.mp4")
 
@@ -179,7 +184,7 @@ def test_run_pipeline_no_stabilize_zeros_field(monkeypatch, tmp_path):
     pipeline.run_pipeline(
         str(tmp_path), str(tmp_path), str(tmp_path / "out"), "t",
         scout_cache=str(tmp_path / "cache.json"),
-        stabilize=False, exposure=True)
+        stabilize=False, exposure=True, auto_curate=False, beat_sync=False)
 
     assert edl.clips[0].stabilize is False
     # exposure fields must still be set (we did not zero them)
@@ -194,7 +199,7 @@ def test_run_pipeline_no_exposure_zeros_fields(monkeypatch, tmp_path):
     pipeline.run_pipeline(
         str(tmp_path), str(tmp_path), str(tmp_path / "out"), "t",
         scout_cache=str(tmp_path / "cache.json"),
-        stabilize=True, exposure=False)
+        stabilize=True, exposure=False, auto_curate=False, beat_sync=False)
 
     assert edl.clips[0].exposure_adjust == pytest.approx(0.0)
     assert edl.clips[0].highlight_clip == pytest.approx(0.0)

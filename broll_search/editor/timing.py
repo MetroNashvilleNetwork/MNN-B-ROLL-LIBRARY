@@ -6,7 +6,10 @@ Varying the number of beats per segment is the single biggest defense against th
 from __future__ import annotations
 
 import bisect
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
+
+from .edl import clamp_clip_to_source
+from .filters import slowmo_playback_factor
 
 
 def beat_segment_endpoints(
@@ -42,7 +45,9 @@ def beat_segment_endpoints(
 def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
                         start_offset: float = 0.0, target_hold: float = 1.2,
                         target_total: float = 0.0,
-                        pattern: Sequence[int] = ()) -> None:
+                        pattern: Sequence[int] = (),
+                        source_durations: Optional[Sequence[float]] = None,
+                        off_beat_fraction: float = 0.15) -> None:
     """Resize each clip so its cut boundary lands on a music beat.
 
     On-screen hold is a (varied) whole number of beats near ``target_hold``; the
@@ -51,7 +56,8 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
     best-moment midpoint, so the moment is preserved while the cut snaps to the beat.
 
     ``start_offset`` is the video time the first footage clip begins at (e.g. a title
-    card). Walks the REAL beat timestamps, so it tracks tempo drift. Mutates ``clips``.
+    ``off_beat_fraction`` — fraction of cuts that intentionally land between beats
+    (human feel; 0 disables). Mutates ``clips``.
     """
     beats = [float(b) for b in beats]
     if len(beats) < 4 or not clips:
@@ -62,6 +68,7 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
     if not pattern:
         base = max(2, round(target_hold / interval))        # beats/shot for ~target_hold
         pattern = (base, base, base + 1, base)               # punchier: mostly the shorter hold
+    off_every = max(0, round(1.0 / off_beat_fraction)) if off_beat_fraction > 0 else 0
     cut_t = float(start_offset)
     idx = bisect.bisect_right(beats, cut_t)                  # first beat after the start
     kept = len(clips)
@@ -70,7 +77,7 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
             kept = k
             break
         if clip.retime == "slowmo":
-            f = slowmo_factor if (slowmo_factor and slowmo_factor > 0) else 2.5
+            f = slowmo_playback_factor(clip.source_fps or 0.0, slowmo_factor=slowmo_factor)
         else:
             f = 1.0
         want = pattern[k % len(pattern)] * interval          # desired on-screen seconds
@@ -86,8 +93,13 @@ def snap_clips_to_beats(clips, beats, slowmo_factor: float = 0.0,
         new_in = max(0.0, round(mid - span / 2.0, 3))
         clip.in_point = new_in
         clip.out_point = round(new_in + span, 3)
-        cut_t = beats[j]
-        idx = j + 1
+        if source_durations is not None and k < len(source_durations):
+            clamp_clip_to_source(clip, float(source_durations[k] or 0))
+        if off_every and (k + 1) % off_every == 0 and j > 0:
+            cut_t = round((beats[j - 1] + beats[j]) / 2.0, 3)
+        else:
+            cut_t = beats[j]
+        idx = bisect.bisect_right(beats, cut_t)
         if target_total and (cut_t - start_offset) >= target_total:  # length ceiling
             kept = k + 1
             break

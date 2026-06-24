@@ -21,18 +21,17 @@ call "_autoedit_settings.bat"
 
 REM Load the Gemini key if present (turns on the AI director). Without it the
 REM editor automatically falls back to its offline quality-based selection.
-set "DIRECTOR="
 if exist ".gemini_key" (
     set /p GEMINI_API_KEY=<".gemini_key"
-    set "DIRECTOR=--director"
 )
 
 REM Timestamp so runs don't overwrite each other.
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set "STAMP=%%I"
 
-%PY% -m broll_search.editor %DIRECTOR% ^
+%PY% -m broll_search.editor ^
   --clips "%FOOTAGE%" --music "%MUSIC%" ^
   --out "%OUTPUT%\%STAMP%-%THEME%" ^
-  --theme "%THEME%" --duration %DURATION% --profile %PROFILE%
+  --theme "%THEME%" --duration %DURATION% --profile %PROFILE% ^
+  --format landscape --look-strength 0.3
 
 exit /b %errorlevel%

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,9 @@ from .config import Config, PROJECT_ROOT
 
 ProgressFn = Callable[[int, Optional[int], str], None]
 LogFn = Callable[[str], None]
+
+# Only one index run at a time (web auto-index + manual re-index + desktop).
+_INDEX_LOCK = threading.Lock()
 
 
 # --- Filename / path parsing ---------------------------------------------
@@ -222,6 +226,7 @@ class IndexResult:
     skipped: int = 0
     removed: int = 0
     errors: int = 0
+    skipped_duplicate: bool = False
     roots_indexed: list[str] = field(default_factory=list)
     started_at: str = ""
     finished_at: str = ""
@@ -262,6 +267,31 @@ def run_index(
     full_rescan: bool = False,
 ) -> IndexResult:
     """Scan all configured footage roots and update the SQLite index."""
+    def _log(msg: str) -> None:
+        if log:
+            log(msg)
+
+    if not _INDEX_LOCK.acquire(blocking=False):
+        _log("Index already in progress — skipped.")
+        return IndexResult(
+            started_at=datetime.now().isoformat(timespec="seconds"),
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+            skipped_duplicate=True,
+        )
+
+    try:
+        return _run_index_locked(config, progress=progress, log=log, full_rescan=full_rescan)
+    finally:
+        _INDEX_LOCK.release()
+
+
+def _run_index_locked(
+    config: Config,
+    *,
+    progress: Optional[ProgressFn] = None,
+    log: Optional[LogFn] = None,
+    full_rescan: bool = False,
+) -> IndexResult:
     def _log(msg: str) -> None:
         if log:
             log(msg)

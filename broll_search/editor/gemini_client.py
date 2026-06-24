@@ -53,18 +53,42 @@ class GeminiDirectorClient(DirectorClient):
             except Exception:
                 pass
 
+    def generate_json(self, prompt: str, schema: dict) -> dict:
+        """Text-only structured JSON (theme/music curation, no video upload)."""
+        resp = self._client.models.generate_content(
+            model=self.model,
+            contents=[prompt],
+            config={
+                "response_mime_type": "application/json",
+                "response_json_schema": schema,
+            },
+        )
+        text = getattr(resp, "text", None) or ""
+        if not text.strip():
+            raise RuntimeError("Gemini returned empty response")
+        return json.loads(text)
+
     def generate_edl(self, prompt: str, proxy_paths: Sequence[str]) -> dict:
         files = []
-        for p in proxy_paths:
-            f = self._client.files.upload(file=p, config={"mime_type": "video/mp4"})
-            files.append(self._wait_active(f))
-        contents = list(files) + [prompt]
-        resp = self._client.models.generate_content(
-            model=self.model, contents=contents,
-            config={"response_mime_type": "application/json",
-                    "response_json_schema": EDL_RESPONSE_SCHEMA})
-        self._cleanup(files)
-        return json.loads(resp.text)
+        try:
+            for p in proxy_paths:
+                f = self._client.files.upload(file=p, config={"mime_type": "video/mp4"})
+                f = self._wait_active(f)
+                state = str(getattr(f, "state", "")).upper()
+                if state.endswith("PROCESSING") or state.endswith("FAILED"):
+                    raise RuntimeError(f"Gemini file upload not ready: {state}")
+                files.append(f)
+            contents = list(files) + [prompt]
+            resp = self._client.models.generate_content(
+                model=self.model, contents=contents,
+                config={"response_mime_type": "application/json",
+                        "response_json_schema": EDL_RESPONSE_SCHEMA})
+            text = getattr(resp, "text", None) or ""
+            if not text.strip():
+                raise RuntimeError("Gemini returned empty response")
+            return json.loads(text)
+        finally:
+            self._cleanup(files)
 
 
 def make_gemini_client(model: str = DEFAULT_MODEL, api_key: Optional[str] = None,

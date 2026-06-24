@@ -33,6 +33,11 @@
   "preview_max_width": 640,
   "preview_max_seconds": 60,
 
+  "_paths_comment": "Optional: map local paths to UNC for the Reveal button, and set share_token when using --share.",
+  "server_footage_root": "",
+  "network_footage_root": "",
+  "share_token": "",
+
   "validation": {
     "_comment": "Tuning for the Phase 1 mapped-drive connection check. listing_timeout_seconds guards against a hung/slow network drive; warn_if_empty flags a reachable folder that contains no footage (often a sign SharePoint sync is behind).",
     "listing_timeout_seconds": 10,
