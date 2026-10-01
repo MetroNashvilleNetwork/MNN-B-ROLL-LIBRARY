@@ -15,7 +15,10 @@
 
     var script = document.currentScript;
     var endpoint = (script && script.getAttribute('data-endpoint')) || '/api/git-sync-status';
+    // The poller rewrites the status every 5 minutes. While an alert is up,
+    // check often so it disappears promptly once a sync succeeds.
     var POLL_MS = 60000;
+    var POLL_WHILE_SHOWING_MS = 15000;
     // A conflict shows at once. Other failures (tests blocking an update,
     // GitHub unreachable) show after this many consecutive polls (~15 min),
     // so a passing network blip never alarms anyone.
@@ -190,13 +193,28 @@
         return status.state === 'error' && Number(status.failures || 0) >= PROBLEM_AFTER_FAILURES;
     }
 
+    var timer = null;
+
+    function showing() {
+        return !!root && !root.hidden;
+    }
+
+    function hide() {
+        // Resolved: remove the alert entirely, closing its panel too.
+        if (root) {
+            setOpen(false);
+            root.hidden = true;
+        }
+        lastKey = '';
+    }
+
     function refresh() {
-        fetch(endpoint, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+        clearTimeout(timer);
+        fetch(endpoint, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } })
             .then(function (response) { return response.ok ? response.json() : null; })
             .then(function (status) {
                 if (!shouldShow(status)) {
-                    if (root) root.hidden = true;
-                    lastKey = '';
+                    hide();
                     return;
                 }
                 if (!root) build();
@@ -209,12 +227,18 @@
                 }
                 root.hidden = false;
             })
-            .catch(function () { /* Not an admin, offline, or no endpoint: stay silent. */ });
+            .catch(function () { /* Not an admin, offline, or no endpoint: stay silent. */ })
+            .then(function () {
+                timer = setTimeout(refresh, showing() ? POLL_WHILE_SHOWING_MS : POLL_MS);
+            });
     }
 
     function start() {
         refresh();
-        setInterval(refresh, POLL_MS);
+        // Coming back to the tab re-checks at once, so a fix made elsewhere shows immediately.
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') refresh();
+        });
     }
 
     if (document.readyState === 'loading') {
