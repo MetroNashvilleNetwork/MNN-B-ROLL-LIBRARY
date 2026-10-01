@@ -7,11 +7,13 @@ a file's location uses ``/api/reveal`` which runs Explorer on this same machine.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib import error as urllib_error, request as urllib_request
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
@@ -21,10 +23,32 @@ from .. import indexer, scheduler
 from .media import MediaEngine
 from . import categories as cats
 from . import doctor as doctor_mod
+from . import git_sync_status
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SERVER_FOOTAGE_ROOT = r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
 NETWORK_FOOTAGE_ROOT = r"\\smb.data.nashville.org\MNNArchive\2026 Metro Nashville Archive B-Roll Footage"
+MNN_CONTROL_URL = os.environ.get("MNN_CONTROL_URL", "http://127.0.0.1:4001").rstrip("/")
+
+
+def _mnn_control_user():
+    """Who is viewing, per MNN Control. The gallery has no sign-in of its own,
+    but MNN Control's session cookie reaches every port on this host."""
+    cookie = request.headers.get("Cookie")
+    if not cookie:
+        return None
+    check = urllib_request.Request(
+        MNN_CONTROL_URL + "/api/check-session",
+        headers={"Cookie": cookie, "Accept": "application/json"},
+    )
+    try:
+        with urllib_request.urlopen(check, timeout=4) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib_error.URLError, OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("authenticated"):
+        return None
+    return data.get("user")
 
 
 def _network_path(path: str) -> str:
@@ -157,6 +181,14 @@ def create_app(config: Config) -> Flask:
     @app.route("/static/<path:name>")
     def static_files(name):
         return send_from_directory(STATIC_DIR, name)
+
+    @app.route("/api/git-sync-status")
+    def api_git_sync_status():
+        # Feeds the admin-only "Git sync conflict" alert (static/git-sync-alert.js).
+        if not git_sync_status.is_admin(_mnn_control_user()):
+            return jsonify({"visible": False}), 403
+        repo = os.environ.get("GIT_SYNC_REPO", "autobroll")
+        return jsonify({"visible": True, **git_sync_status.load(repo)})
 
     # -- API --------------------------------------------------------------
 
