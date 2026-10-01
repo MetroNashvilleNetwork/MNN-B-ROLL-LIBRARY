@@ -102,6 +102,52 @@ def create_app(config: Config) -> Flask:
         # readers run concurrently with a writer).
         return db.connect(config.database_abspath, ensure=False)
 
+    def prune_missing_paths(paths) -> None:
+        """Remove stale rows when the web app discovers deleted footage.
+
+        The scheduled/full indexer is still the main source of truth, but this
+        keeps the UI from showing dead cards between indexing passes.
+        """
+        paths = sorted({p for p in paths if p})
+        if not paths:
+            return
+        con = db.connect(config.database_abspath, ensure=False)
+        try:
+            db.delete_paths(con, paths)
+            con.commit()
+        finally:
+            con.close()
+
+    def row_exists(row) -> bool:
+        if not row:
+            return False
+        path = row["path"]
+        return bool(path and os.path.exists(path))
+
+    def get_existing_by_id(file_id: int):
+        con = get_db()
+        try:
+            row = db.get_by_id(con, file_id)
+        finally:
+            con.close()
+        if row and not row_exists(row):
+            prune_missing_paths([row["path"]])
+            return None
+        return row
+
+    def search_existing(con, *, limit: int, offset: int, **kwargs):
+        """Search, prune missing rows found on the requested page, then retry.
+
+        A retry matters because deleting stale rows can pull later valid clips
+        into the current page.
+        """
+        rows = db.search(con, limit=limit, offset=offset, **kwargs)
+        missing = [r["path"] for r in rows if not row_exists(r)]
+        if missing:
+            prune_missing_paths(missing)
+            rows = db.search(con, limit=limit, offset=offset, **kwargs)
+        return [r for r in rows if row_exists(r)]
+
     # -- pages ------------------------------------------------------------
 
     @app.route("/")
@@ -145,14 +191,16 @@ def create_app(config: Config) -> Flask:
                 count = db.search_count(con, fts_expr=expr)
                 if count <= 0:
                     continue
-                sample = db.search(con, fts_expr=expr, sort="modified", limit=1)
+                sample = search_existing(con, fts_expr=expr, sort="modified", limit=1, offset=0)
+                if not sample:
+                    continue
                 out.append({
                     "key": c["key"], "label": c["label"], "count": count,
-                    "sample_id": sample[0]["id"] if sample else None,
+                    "sample_id": sample[0]["id"],
                 })
             # Catch-all: clips that match no category at all ("More B-Roll").
             categorized = _categorized_ids(con)
-            uncat = [r for r in db.search(con, sort="modified", limit=100000)
+            uncat = [r for r in search_existing(con, sort="modified", limit=100000, offset=0)
                      if r["id"] not in categorized]
             if uncat:
                 out.append({
@@ -196,10 +244,18 @@ def create_app(config: Config) -> Flask:
             if fts_expr == "":
                 fts_expr = None
 
-            rows = db.search(con, q, extensions=extensions, shot_type=shot,
-                             shooter=shooter, date_from=date_from, date_to=date_to,
-                             sort=sort, limit=limit, offset=offset,
-                             fts_expr=fts_expr, exclude_ids=exclude_ids)
+            search_kwargs = {
+                "query": q,
+                "extensions": extensions,
+                "shot_type": shot,
+                "shooter": shooter,
+                "date_from": date_from,
+                "date_to": date_to,
+                "sort": sort,
+                "fts_expr": fts_expr,
+                "exclude_ids": exclude_ids,
+            }
+            rows = search_existing(con, limit=limit, offset=offset, **search_kwargs)
             total = db.search_count(con, q, extensions=extensions, shot_type=shot,
                                     shooter=shooter, date_from=date_from, date_to=date_to,
                                     fts_expr=fts_expr, exclude_ids=exclude_ids)
@@ -212,11 +268,7 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/api/clip/<int:file_id>")
     def api_clip(file_id):
-        con = get_db()
-        try:
-            row = db.get_by_id(con, file_id)
-        finally:
-            con.close()
+        row = get_existing_by_id(file_id)
         if not row:
             return jsonify({"error": "not found"}), 404
         d = _row_to_dict(row)
@@ -225,11 +277,7 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/thumb/<int:file_id>")
     def thumb(file_id):
-        con = get_db()
-        try:
-            row = db.get_by_id(con, file_id)
-        finally:
-            con.close()
+        row = get_existing_by_id(file_id)
         if not row:
             return Response(status=404)
         p = media.thumbnail_path(row["path"], row["mtime_ns"])
@@ -243,11 +291,7 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/preview/<int:file_id>")
     def preview(file_id):
-        con = get_db()
-        try:
-            row = db.get_by_id(con, file_id)
-        finally:
-            con.close()
+        row = get_existing_by_id(file_id)
         if not row:
             return Response(status=404)
         p = media.preview_path(row["path"], row["mtime_ns"])
@@ -257,11 +301,7 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/download/<int:file_id>")
     def download(file_id):
-        con = get_db()
-        try:
-            row = db.get_by_id(con, file_id)
-        finally:
-            con.close()
+        row = get_existing_by_id(file_id)
         if not row:
             return Response(status=404)
         path = row["path"]
@@ -277,11 +317,11 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/reveal", methods=["POST"])
     def api_reveal():
         data = request.get_json(silent=True) or {}
-        con = get_db()
         try:
-            row = db.get_by_id(con, int(data.get("id", -1)))
-        finally:
-            con.close()
+            file_id = int(data.get("id", -1))
+        except (TypeError, ValueError):
+            file_id = -1
+        row = get_existing_by_id(file_id)
         if not row:
             return jsonify({"ok": False, "error": "not found"}), 404
         network_path = _network_path(row["path"])
