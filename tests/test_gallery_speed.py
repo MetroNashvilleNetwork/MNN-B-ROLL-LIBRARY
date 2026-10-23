@@ -11,7 +11,10 @@ from pathlib import Path
 
 from broll_search import database as db
 from broll_search.config import Config
-from broll_search.web.app import create_app
+from broll_search.web.app import (
+    NETWORK_FOOTAGE_ROOT, create_app, poster_sources, _file_is_local, _network_path,
+)
+from broll_search.web.doctor import BUILD_MARKER
 from broll_search.web.media import MediaEngine
 
 
@@ -134,6 +137,7 @@ class GallerySpeedTests(unittest.TestCase):
         recent_names = [i["filename"] for i in body["sections"][0]["items"]]
         self.assertIn("zzzzunique-clip.mp4", recent_names)
         self.assertEqual(body["filters"]["total"], 82)
+        self.assertEqual(body["build"], BUILD_MARKER)
         more = next(s for s in body["sections"] if s["key"] == "_more")
         self.assertEqual(more["items"][0]["filename"], "zzzzunique-clip.mp4")
 
@@ -241,8 +245,193 @@ class GallerySpeedTests(unittest.TestCase):
         eng = MediaEngine(ffmpeg_path=ffmpeg, cache_dir=self.root / "cache5")
         poster = eng.thumbnail_path(str(src), src.stat().st_mtime_ns)
         self.assertIsNotNone(poster)
-        self.assertTrue(poster.read_bytes().startswith(b"\xff\xd8"))
+        data = poster.read_bytes()
+        self.assertTrue(data.startswith(b"\xff\xd8"))
         self.assertGreater(poster.stat().st_size, 100)
+        self.assertGreater(_jpeg_width(data), 0)
+        self.assertLessEqual(_jpeg_width(data), 480)
+
+    def test_archive_paths_map_onto_the_share(self):
+        tail = r"\Aaron\July\clip.mp4"
+        expected = NETWORK_FOOTAGE_ROOT + tail
+        onedrive = (
+            r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov"
+            r"\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
+            + tail
+        )
+        mapped = r"X:\2026 Metro Nashville Archive B-Roll Footage" + tail
+        forwarded = onedrive.replace("\\", "/")
+        self.assertEqual(_network_path(onedrive), expected)
+        self.assertEqual(_network_path(mapped), expected)
+        self.assertEqual(_network_path(forwarded), expected)
+        self.assertEqual(_network_path(expected), expected)
+        self.assertEqual(poster_sources(onedrive), [expected, onedrive])
+        self.assertEqual(poster_sources(""), [])
+
+    def test_unc_share_is_not_statd(self):
+        import os
+        share = NETWORK_FOOTAGE_ROOT + r"\Aaron\July\clip.mp4"
+
+        def boom(path):
+            raise AssertionError(f"stat'd {path}")
+
+        orig = os.path.isfile
+        os.path.isfile = boom
+        try:
+            self.assertFalse(_file_is_local(share))
+            self.assertEqual(poster_sources(share), [share])
+        finally:
+            os.path.isfile = orig
+
+    def test_hydrated_archive_file_stays_local(self):
+        folder = self.root / "2026 Metro Nashville Archive B-Roll Footage" / "Aaron"
+        folder.mkdir(parents=True)
+        clip = folder / "clip.mp4"
+        clip.write_bytes(b"video")
+        self.assertEqual(poster_sources(str(clip)), [str(clip)])
+
+    def test_v2_timeout_marker_is_retried_from_the_share(self):
+        eng = MediaEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-v2")
+        src = self.root / "cloud.mp4"
+        src.write_bytes(b"video")
+        key = eng._key(str(src), 9)
+        (eng.thumbs_dir / f"{key}.fail").write_text(
+            f"v2\n{time.time():.0f}\ntimeout\n", encoding="utf-8")
+        self.assertEqual(eng.thumb_state(str(src), 9), "pending")
+        eng.enqueue_thumbnail(str(src), 9, front=True)
+        self.assertEqual(eng.thumb_queue_depth(), 1)
+
+    def test_slow_share_falls_through_to_the_local_file(self):
+        eng = _TimeoutThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-share")
+        local = self.root / "clip.mp4"
+        local.write_bytes(b"video")
+        share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
+        eng.source_resolver = lambda src: [share, str(local)]
+        import os
+        orig = os.path.exists
+
+        def guard(path):
+            if str(path).startswith("\\\\"):
+                raise AssertionError(f"stat'd {path}")
+            return orig(path)
+
+        os.path.exists = guard
+        try:
+            made = eng._generate_thumbnail(str(local), eng._key(str(local), 3))
+        finally:
+            os.path.exists = orig
+        self.assertTrue(made)
+        self.assertEqual(eng.runs, 2)
+        self.assertEqual(eng.tried, [share, str(local)])
+
+    def test_unreadable_share_does_not_retry_filters(self):
+        eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-unreadable")
+        local = self.root / "clip.mp4"
+        local.write_bytes(b"video")
+        share = r"\\server\share\clip.mp4"
+        eng.source_resolver = lambda src: [share, str(local)]
+        self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
+        self.assertEqual(eng.runs, 2)
+        self.assertEqual(eng.tried, [share, str(local)])
+
+    def test_codec_error_tries_zscale_before_another_copy(self):
+        eng = _ZscaleEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-zscale")
+        local = self.root / "tenbit.mp4"
+        local.write_bytes(b"video")
+        self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 8)))
+        self.assertEqual(eng.runs, 2)
+        self.assertIn("zscale", eng.filters[1])
+        self.assertNotIn("zscale", eng.filters[0])
+
+    def test_preview_reads_the_share_when_onedrive_is_missing(self):
+        eng = _OkEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-preview")
+        eng.tried = []
+        real_run = eng._run
+
+        def _run(cmd, timeout):
+            eng.tried.append(cmd[cmd.index("-i") + 1])
+            return real_run(cmd, timeout)
+
+        eng._run = _run
+        indexed = (
+            r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov"
+            r"\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
+            r"\Aaron\July\clip.mp4"
+        )
+        eng.source_resolver = poster_sources
+        out = eng.preview_path(indexed, 1)
+        self.assertIsNotNone(out)
+        self.assertEqual(eng.tried, [NETWORK_FOOTAGE_ROOT + r"\Aaron\July\clip.mp4"])
+
+
+class _TimeoutThenOk(MediaEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.runs = 0
+        self.tried = []
+
+    def _run(self, cmd, timeout):
+        self.runs += 1
+        src = cmd[cmd.index("-i") + 1]
+        self.tried.append(src)
+        if src.startswith("\\\\"):
+            self._last_error = "timeout"
+            return "timeout"
+        Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+        return "ok"
+
+
+class _UnreadableThenOk(MediaEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.runs = 0
+        self.tried = []
+
+    def _run(self, cmd, timeout):
+        self.runs += 1
+        src = cmd[cmd.index("-i") + 1]
+        self.tried.append(src)
+        if src.startswith("\\\\"):
+            self._last_error = "\\\\server\\share\\clip.mp4: No such file or directory"
+            return "error"
+        Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+        return "ok"
+
+
+class _ZscaleEngine(MediaEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.runs = 0
+        self.filters = []
+
+    def _run(self, cmd, timeout):
+        self.runs += 1
+        vf = cmd[cmd.index("-vf") + 1]
+        self.filters.append(vf)
+        if "zscale" not in vf:
+            self._last_error = "Error reinitializing filters"
+            return "error"
+        Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+        return "ok"
+
+
+def _jpeg_width(data: bytes) -> int:
+    """SOF width, so a generated poster can be checked without Pillow."""
+    i = 2
+    while i + 8 < len(data):
+        if data[i] != 0xFF:
+            break
+        marker = data[i + 1]
+        if marker in (0xC0, 0xC1, 0xC2):
+            return int.from_bytes(data[i + 7:i + 9], "big")
+        if marker == 0xD8 or marker == 0xD9:
+            i += 2
+            continue
+        size = int.from_bytes(data[i + 2:i + 4], "big")
+        if size < 2:
+            break
+        i += 2 + size
+    return 0
 
 
 if __name__ == "__main__":

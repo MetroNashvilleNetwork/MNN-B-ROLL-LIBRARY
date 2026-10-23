@@ -22,12 +22,12 @@ from pathlib import Path
 from typing import Optional
 
 from .. import database as db
-from .media import MediaEngine, _hidden_kwargs
+from .media import MediaEngine, _hidden_kwargs, is_cloud_placeholder
 
 # Bump this string on every push that touches the server so we can confirm, from
 # the browser, that the server actually pulled the latest code. If /doctor shows
 # an old marker, the GitHub sync is behind and no code fix will take effect.
-BUILD_MARKER = "2026-10-23 posters-open-cloud-files"
+BUILD_MARKER = "2026-10-23 posters-from-archive-share"
 
 
 def _run_capture(cmd: list, timeout: float) -> dict:
@@ -94,6 +94,12 @@ def _read_test(path: str, nbytes: int = 1_000_000) -> dict:
 def _probe_clip(media: MediaEngine, row, *, attempt_thumb: bool) -> dict:
     path = row["path"]
     rep: dict = {"id": row["id"], "filename": row["filename"], "path": path}
+    resolver = getattr(media, "source_resolver", None)
+    if resolver is not None:
+        try:
+            rep["poster_sources"] = [p for p in (resolver(path) or []) if p]
+        except Exception as exc:
+            rep["poster_sources_error"] = f"{type(exc).__name__}: {exc}"
 
     try:
         rep["exists"] = os.path.exists(path)
@@ -106,10 +112,19 @@ def _probe_clip(media: MediaEngine, row, *, attempt_thumb: bool) -> dict:
         rep["size_bytes"] = None
         rep["size_error"] = str(exc)
 
-    rep["read_first_1mb"] = _read_test(path) if rep.get("exists") else None
+    # A placeholder "exists" but opening it downloads the whole clip. Posters
+    # use the share listed in poster_sources, so don't open the placeholder here.
+    rep["cloud_placeholder"] = bool(rep.get("exists") and is_cloud_placeholder(path))
+    if rep["cloud_placeholder"]:
+        rep["read_first_1mb"] = {
+            "ok": False, "bytes_read": 0, "elapsed": 0,
+            "error": "online-only placeholder; poster is read from the archive share",
+        }
+    else:
+        rep["read_first_1mb"] = _read_test(path) if rep.get("exists") else None
 
     # ffprobe the streams (codec/pix_fmt/dims) — shows HEVC/10-bit/multi-stream.
-    if media.ffprobe and rep.get("exists"):
+    if media.ffprobe and rep.get("exists") and not rep["cloud_placeholder"]:
         pr = _run_capture(
             [media.ffprobe, "-v", "error", "-show_entries",
              "stream=index,codec_type,codec_name,profile,pix_fmt,width,height",
@@ -120,7 +135,7 @@ def _probe_clip(media: MediaEngine, row, *, attempt_thumb: bool) -> dict:
                           "output": (pr["stdout"] or pr["stderr"]).strip()[:1200]}
 
     # Live thumbnail attempt with captured ffmpeg stderr — the smoking gun.
-    if attempt_thumb and media.ffmpeg and rep.get("exists"):
+    if attempt_thumb and media.ffmpeg and rep.get("exists") and not rep["cloud_placeholder"]:
         w = media.preview_max_width
         out = media.cache_dir / "doctor_probe.jpg"
         cmd = [media.ffmpeg, "-y", "-ss", "1", "-i", path, "-frames:v", "1",
@@ -234,9 +249,20 @@ def render_html(report: dict) -> str:
 
     for s in report.get("samples", []):
         tag = "DJI/drone" if (s["filename"].upper().startswith("DJI") or "drone" in s["path"].lower()) else "other"
+        if s.get("cloud_placeholder"):
+            sources = s.get("poster_sources") or []
+            share = sources[0] if sources else ""
+            verdicts.append(("warn", f"[{tag}] {esc(s['filename'])}: the OneDrive copy is "
+                                    f"online-only, so the poster is read from the archive "
+                                    f"share ({esc(share)})."))
+            continue
         if not s.get("exists"):
+            sources = s.get("poster_sources") or []
+            share = sources[0] if sources and sources[0] != s.get("path") else ""
+            extra = f" Poster source: {esc(share)}." if share else ""
             verdicts.append(("bad", f"[{tag}] {esc(s['filename'])}: the server cannot see "
-                                    f"this file at all ({esc(s.get('exists_error',''))})."))
+                                    f"this file at all ({esc(s.get('exists_error',''))})."
+                                    f"{extra}"))
             continue
         rt = s.get("read_first_1mb") or {}
         if rt and not rt.get("ok"):

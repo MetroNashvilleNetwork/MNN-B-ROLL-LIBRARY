@@ -20,7 +20,7 @@ from flask import Flask, Response, jsonify, request, send_file, send_from_direct
 from .. import __app_name__, database as db
 from ..config import Config
 from .. import indexer, scheduler
-from .media import MediaEngine
+from .media import MediaEngine, is_cloud_placeholder
 from . import categories as cats
 from . import doctor as doctor_mod
 from . import git_sync_status
@@ -28,6 +28,7 @@ from . import git_sync_status
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 SERVER_FOOTAGE_ROOT = r"C:\Users\SRV-ITS-MNN\OneDrive - Metro Nashville Gov\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
 NETWORK_FOOTAGE_ROOT = r"\\smb.data.nashville.org\MNNArchive\2026 Metro Nashville Archive B-Roll Footage"
+_ARCHIVE_DIR = "2026 Metro Nashville Archive B-Roll Footage"
 MNN_CONTROL_URL = os.environ.get("MNN_CONTROL_URL", "http://127.0.0.1:4001").rstrip("/")
 
 
@@ -51,15 +52,74 @@ def _mnn_control_user():
     return data.get("user")
 
 
+def _norm_win(path: str) -> str:
+    """Compare Windows paths on any OS. ``normpath`` keeps backslashes on Linux."""
+    return (path or "").replace("/", "\\").rstrip("\\")
+
+
+def _archive_tail(path: str):
+    """Path under the archive folder, or None when this is not archive footage.
+
+    Matches the OneDrive copy, a mapped drive such as ``X:\\...``, and the
+    UNC share itself. The tail keeps the original separators as backslashes.
+    """
+    norm = _norm_win(path)
+    if not norm:
+        return None
+    needle = _ARCHIVE_DIR.lower()
+    hay = norm.lower()
+    idx = hay.find(needle)
+    if idx < 0:
+        return None
+    # The OneDrive folder is "MNNPublic - 2026 Metro Nashville Archive ...",
+    # so the archive name is not always its own path segment. A space or a
+    # separator before it is enough; a match glued onto another word is not.
+    if idx > 0 and hay[idx - 1] not in ("\\", " "):
+        return None
+    return norm[idx + len(_ARCHIVE_DIR):].lstrip("\\")
+
+
 def _network_path(path: str) -> str:
-    norm_path = os.path.normcase(os.path.normpath(path))
-    norm_root = os.path.normcase(os.path.normpath(SERVER_FOOTAGE_ROOT))
-    if norm_path == norm_root:
-        return NETWORK_FOOTAGE_ROOT
-    if norm_path.startswith(norm_root + os.sep):
-        rel = os.path.relpath(os.path.normpath(path), os.path.normpath(SERVER_FOOTAGE_ROOT))
-        return os.path.normpath(os.path.join(NETWORK_FOOTAGE_ROOT, rel))
-    return path
+    tail = _archive_tail(path)
+    if tail is None:
+        return path
+    root = NETWORK_FOOTAGE_ROOT.rstrip("\\")
+    return root if not tail else root + "\\" + tail
+
+
+def _file_is_local(path: str) -> bool:
+    """True when ``path`` is a real file on this machine.
+
+    UNC paths are not stat'd. OneDrive placeholders report as files, so the
+    cloud attribute is checked too: those are not local.
+    """
+    if not path or path.startswith("\\\\") or path.startswith("//"):
+        return False
+    try:
+        if not os.path.isfile(path):
+            return False
+    except OSError:
+        return False
+    return not is_cloud_placeholder(path)
+
+
+def poster_sources(path: str) -> list:
+    """Where to read a poster from, best first.
+
+    A hydrated local file is used as-is. Anything else tries the archive
+    share before the indexed path, so ffmpeg can grab one frame from the
+    share instead of waiting for OneDrive to download the whole clip.
+    """
+    if not path:
+        return []
+    network = _network_path(path)
+    if _file_is_local(path):
+        return [path]
+    ordered = []
+    if network and network != path:
+        ordered.append(network)
+    ordered.append(path)
+    return ordered
 
 
 def _row_to_dict(r) -> dict:
@@ -122,6 +182,9 @@ def create_app(config: Config, media: Optional[MediaEngine] = None, *,
             preview_max_width=config.preview_max_width,
             preview_max_seconds=config.preview_max_seconds,
         )
+    # Posters and previews read the archive share when the indexed OneDrive
+    # path is missing or still online-only. Set before workers start.
+    media.source_resolver = poster_sources
     index_state = _IndexState()
 
     # Create the schema once at startup (the only place that may write).
@@ -319,6 +382,7 @@ def create_app(config: Config, media: Optional[MediaEngine] = None, *,
             payload = {
                 "filters": filters_payload(con),
                 "sections": home_sections(con, limit),
+                "build": doctor_mod.BUILD_MARKER,
             }
         finally:
             con.close()
