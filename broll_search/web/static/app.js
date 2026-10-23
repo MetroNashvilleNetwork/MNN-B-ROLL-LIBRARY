@@ -76,19 +76,26 @@ function chip(group, value, label){
   c.addEventListener("keydown",(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(); } });
   return c;
 }
-async function loadFilters(){
-  const data = await fetch("/api/filters").then((r)=>r.json());
-  const fill=(id,group,values)=>{ const box=el(id); box.innerHTML=""; values.forEach((v)=>box.appendChild(chip(group,v))); };
+function applyFilterData(data){
+  const fill=(id,group,values)=>{ const box=el(id); box.innerHTML=""; (values||[]).forEach((v)=>box.appendChild(chip(group,v))); };
   fill("f-shooter","shooter",data.shooters);
   fill("f-shot","shot",data.shot_types);
-  const extBox=el("f-ext"); extBox.innerHTML=""; data.extensions.forEach((e)=>extBox.appendChild(chip("ext",e.toLowerCase(),e.toUpperCase())));
+  const extBox=el("f-ext"); extBox.innerHTML="";
+  (data.extensions||[]).forEach((e)=>extBox.appendChild(chip("ext",e.toLowerCase(),e.toUpperCase())));
   const from=el("f-from"),to=el("f-to");
-  data.months.forEach((m)=>{ from.appendChild(new Option(m.label,m.date)); to.appendChild(new Option(m.label,m.date)); });
-  from.addEventListener("change",()=>{ state.from=from.value; applyState(); });
-  to.addEventListener("change",()=>{ state.to=to.value; applyState(); });
+  (data.months||[]).forEach((m)=>{ from.appendChild(new Option(m.label,m.date)); to.appendChild(new Option(m.label,m.date)); });
+  if(!from.dataset.wired){
+    from.dataset.wired="1";
+    from.addEventListener("change",()=>{ state.from=from.value; applyState(); });
+    to.addEventListener("change",()=>{ state.to=to.value; applyState(); });
+  }
   el("heroStat").innerHTML=`<b>0</b> clips ready to browse`;
-  countUp(el("heroStat").querySelector("b"), data.total, 1000);
+  countUp(el("heroStat").querySelector("b"), data.total, 900);
   if(!data.has_ffmpeg) el("ffmpegNote").classList.remove("hidden");
+}
+async function loadFilters(){
+  const data = await fetch("/api/filters").then((r)=>r.json());
+  applyFilterData(data);
   return data;
 }
 
@@ -103,7 +110,7 @@ function tileHTML(item,w,h){
   const tags=[item.shooter,item.month,item.shot_type].filter(Boolean).map(esc).join(" · ");
   const on=inColl(item.id);
   return `<div class="tile" data-id="${item.id}" style="width:${w}px;height:${h}px" tabindex="0" role="button" aria-label="${esc(item.filename)}">
-    <img loading="lazy" src="/thumb/${item.id}" alt="${esc(item.filename)}" />
+    <img data-thumb="${item.id}" alt="${esc(item.filename)}" />
     <video muted loop preload="none" playsinline></video>
     <div class="tile-scrim"></div>
     <button class="tile-star ${on?"on":""}" data-id="${item.id}" title="Add to collection" tabindex="-1">${on?"✓":"★"}</button>
@@ -113,31 +120,85 @@ function tileHTML(item,w,h){
   </div>`;
 }
 let activePreviewVideo = null;
+/* Posters are requested only once a tile is near the viewport, and only a
+   cached JPEG is painted. A 404 means the server is still extracting the
+   frame; retry with backoff instead of firing ffmpeg for every card at once. */
+const thumbObserver = new IntersectionObserver((entries)=>{
+  entries.forEach((en)=>{
+    const img = en.target;
+    if (img.dataset.done === "1") return;
+    if (en.isIntersecting) {
+      img.dataset.watch = "1";
+      if (img.dataset.started !== "1") {
+        img.dataset.started = "1";
+        watchThumb(img);
+      }
+    } else {
+      img.dataset.watch = "0";
+    }
+  });
+}, {root: null, rootMargin: "240px"});
+function watchThumb(img){
+  let attempt = 0;
+  const tick = () => {
+    if (!img.isConnected) return;
+    if (img.dataset.watch !== "1") { img.dataset.started = ""; return; }
+    const probe = new Image();
+    const q = attempt ? `?r=${attempt}` : "";
+    probe.onload = () => {
+      if (!img.isConnected) return;
+      img.src = probe.src;
+      img.dataset.done = "1";
+      const tile = img.closest(".tile");
+      if (tile) tile.classList.add("loaded");
+    };
+    probe.onerror = () => {
+      if (!img.isConnected) return;
+      if (img.dataset.watch !== "1") { img.dataset.started = ""; return; }
+      attempt += 1;
+      if (attempt > 24) { img.dataset.started = ""; return; }
+      const wait = Math.min(10000, Math.round(700 * Math.pow(1.35, attempt)));
+      setTimeout(tick, wait);
+    };
+    probe.src = `/thumb/${img.dataset.thumb}${q}`;
+  };
+  tick();
+}
+function observeThumb(img){
+  if (img && img.dataset.thumb) thumbObserver.observe(img);
+}
 function wireTile(tile){
   const id=tile.dataset.id, video=tile.querySelector("video");
   const img=tile.querySelector("img");
-  if(img){ if(img.complete && img.naturalWidth) tile.classList.add("loaded");
-    else { img.addEventListener("load",()=>tile.classList.add("loaded"),{once:true});
-           img.addEventListener("error",()=>tile.classList.add("loaded"),{once:true}); } }
-  let hoverTimer;
+  if(img) observeThumb(img);
+  let hoverTimer, previewTimer;
   const stopVideo=()=>{
+    clearTimeout(previewTimer);
     tile.classList.remove("playing");
+    video.onerror = null;
     video.pause();
     video.removeAttribute("src");
     video.load();
     if(activePreviewVideo===video) activePreviewVideo=null;
   };
-  tile.addEventListener("mouseenter",()=>{ hoverTimer=setTimeout(()=>{
+  const kickPreview=(attempt)=>{
+    if(!tile.matches(":hover")) return;
+    video.onerror = ()=>{
+      tile.classList.remove("playing");
+      if(!tile.matches(":hover") || attempt>=30) return;
+      previewTimer = setTimeout(()=>kickPreview(attempt+1), 2500);
+    };
+    video.onplaying = ()=>{ tile.classList.add("playing"); };
     if(activePreviewVideo && activePreviewVideo!==video){
       activePreviewVideo.pause();
       activePreviewVideo.removeAttribute("src");
       activePreviewVideo.load();
     }
     activePreviewVideo=video;
-    video.src=`/preview/${id}`;
-    tile.classList.add("playing");
+    video.src=`/preview/${id}?r=${attempt}`;
     video.play().catch(()=>{});
-  },220); });
+  };
+  tile.addEventListener("mouseenter",()=>{ hoverTimer=setTimeout(()=>kickPreview(0),220); });
   tile.addEventListener("mouseleave",()=>{ clearTimeout(hoverTimer); stopVideo(); });
   tile.addEventListener("click",(e)=>{ if(e.target.closest(".tile-star")) return; openModal(id); });
   tile.addEventListener("keydown",(e)=>{
@@ -149,20 +210,15 @@ function wireTile(tile){
 }
 
 /* ---------- HOME (category rows) ---------- */
-async function loadHome(){
+function renderHome(sections){
   const rowsEl=el("rows"); rowsEl.innerHTML="";
-  const cats=(await fetch("/api/categories").then((r)=>r.json())).categories || [];
-  const sections=[{key:"",label:"Recently added",sort:"modified"}].concat(cats.map((c)=>({key:c.key,label:c.label,count:c.count,sort:"modified"})));
   for(const sec of sections){
-    const params=new URLSearchParams({sort:sec.sort,limit:14});
-    if(sec.key) params.set("category",sec.key);
-    const data=await fetch("/api/search?"+params).then((r)=>r.json());
-    if(!data.items.length) continue;
-    const tiles=data.items.map((it)=>tileHTML(it,256,144)).join("");
+    if(!sec.items || !sec.items.length) continue;
+    const tiles=sec.items.map((it)=>tileHTML(it,256,144)).join("");
     const section=document.createElement("div"); section.className="row-section";
     section.innerHTML=`<div class="row-head">
         <h3 class="row-title">${esc(sec.label)}</h3>
-        <span class="row-count">${data.total.toLocaleString()}</span>
+        <span class="row-count">${Number(sec.count||0).toLocaleString()}</span>
         <button class="row-seeall" data-cat="${sec.key}" data-label="${esc(sec.label)}">See all →</button>
       </div>
       <div class="row-scroll-wrap">
@@ -185,6 +241,11 @@ async function loadHome(){
   },{rootMargin:"0px 0px -6% 0px"});
   rowsEl.querySelectorAll(".row-section").forEach((s)=>ro.observe(s));
   refreshCollUI();
+}
+async function loadHome(){
+  const data = await fetch("/api/home").then((r)=>r.json());
+  if(data.filters) applyFilterData(data.filters);
+  renderHome(data.sections || []);
 }
 
 /* ---------- views ---------- */
@@ -287,14 +348,30 @@ async function openModal(id){
     ["Size",fmtSize(data.size)],["Modified",fmtDate(data.modified)],["Folder",data.folder]].filter(([,v])=>v);
   el("modalMeta").innerHTML=rows.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
   const video=el("modalVideo"),noPrev=el("modalNoPreview");
-  if(data.has_preview){ video.src=`/preview/${id}`; video.poster=`/thumb/${id}`; video.classList.remove("hidden"); noPrev.classList.add("hidden"); }
+  if(data.has_preview){
+    video.classList.remove("hidden"); noPrev.classList.add("hidden");
+    video.removeAttribute("poster");
+    const poster=new Image();
+    poster.onload=()=>{ if(!el("modal").classList.contains("hidden")) video.poster=poster.src; };
+    poster.src=`/thumb/${id}`;
+    let attempt=0;
+    const loadPreview=()=>{
+      video.onerror=()=>{
+        if(el("modal").classList.contains("hidden") || attempt>=30) return;
+        attempt+=1;
+        setTimeout(loadPreview, 2500);
+      };
+      video.src=`/preview/${id}?r=${attempt}`;
+    };
+    loadPreview();
+  }
   else { video.classList.add("hidden"); video.removeAttribute("src"); noPrev.classList.remove("hidden"); }
   const cb=el("collectBtn"); cb.dataset.id=id; cb.onclick=()=>{ toggleColl(id); };
   el("downloadBtn").onclick=()=>downloadClip(id);
   el("copyBtn").onclick=()=>{ navigator.clipboard?.writeText(data.network_path||data.path); toast("Network path copied."); };
   el("modal").classList.remove("hidden"); refreshCollUI();
 }
-function closeModal(){ el("modal").classList.add("hidden"); const v=el("modalVideo"); v.pause(); v.removeAttribute("src"); }
+function closeModal(){ el("modal").classList.add("hidden"); const v=el("modalVideo"); v.onerror=null; v.pause(); v.removeAttribute("src"); v.removeAttribute("poster"); }
 function downloadClip(id){
   window.location.href=`/download/${id}`;
   toast("Download started.");
@@ -308,13 +385,14 @@ function renderDrawer(){
   el("drawerEmpty").classList.toggle("hidden", items.length>0);
   el("drawerItems").innerHTML=items.map((it)=>`
     <div class="coll-item" data-id="${it.id}">
-      <img class="coll-thumb" src="/thumb/${it.id}" data-open="${it.id}" alt="" />
+      <img class="coll-thumb" data-thumb="${it.id}" data-open="${it.id}" alt="" />
       <div class="coll-meta"><div class="coll-name">${esc(it.filename)}</div>
         <div class="coll-sub">${[it.shooter,it.month].filter(Boolean).map(esc).join(" · ")}</div></div>
       <button class="coll-x" data-remove="${it.id}" title="Remove">✕</button>
     </div>`).join("");
   el("drawerItems").querySelectorAll("[data-remove]").forEach((b)=>b.addEventListener("click",()=>{ toggleColl(b.dataset.remove); renderDrawer(); }));
   el("drawerItems").querySelectorAll("[data-open]").forEach((b)=>b.addEventListener("click",()=>{ closeDrawer(); openModal(b.dataset.open); }));
+  el("drawerItems").querySelectorAll("img[data-thumb]").forEach((img)=>{ img.dataset.watch="1"; watchThumb(img); });
 }
 
 /* ---------- re-index ---------- */
@@ -363,7 +441,7 @@ new IntersectionObserver((entries)=>{ if(entries[0].isIntersecting && !state.loa
 /* ---------- boot ---------- */
 loadColl();
 (async function boot(){
-  await loadFilters();
-  await loadHome();
+  try { await loadHome(); }
+  catch(e){ toast("Could not load the library."); }
   refreshCollUI();
 })();

@@ -27,7 +27,7 @@ from .media import MediaEngine, _hidden_kwargs
 # Bump this string on every push that touches the server so we can confirm, from
 # the browser, that the server actually pulled the latest code. If /doctor shows
 # an old marker, the GitHub sync is behind and no code fix will take effect.
-BUILD_MARKER = "2026-06-08 doctor-v1 + 10-bit-preview-fix"
+BUILD_MARKER = "2026-10-23 fast-home + background-thumbs"
 
 
 def _run_capture(cmd: list, timeout: float) -> dict:
