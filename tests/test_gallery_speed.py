@@ -182,6 +182,17 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertEqual(rv.headers["X-Thumb-State"], "ready")
         self.assertTrue(rv.data.startswith(b"\xff\xd8"))
 
+    def test_old_unreadable_marker_is_retried(self):
+        """Failure notes from the build that skipped OneDrive files are stale."""
+        eng = MediaEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-old")
+        src = self.root / "cloud.mp4"
+        src.write_bytes(b"video")
+        key = eng._key(str(src), 9)
+        (eng.thumbs_dir / f"{key}.fail").write_text("100\nunreadable\n", encoding="utf-8")
+        self.assertEqual(eng.thumb_state(str(src), 9), "pending")
+        eng.enqueue_thumbnail(str(src), 9, front=True)
+        self.assertEqual(eng.thumb_queue_depth(), 1)
+
     def test_timeout_is_remembered_and_not_retried(self):
         eng = _TimeoutEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache2")
         src = self.root / "slow.mp4"

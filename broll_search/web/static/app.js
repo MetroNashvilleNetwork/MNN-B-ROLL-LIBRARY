@@ -138,29 +138,49 @@ const thumbObserver = new IntersectionObserver((entries)=>{
     }
   });
 }, {root: null, rootMargin: "240px"});
+function paintThumb(img, blob, done){
+  const url = URL.createObjectURL(blob);
+  if (img.dataset.blob) URL.revokeObjectURL(img.dataset.blob);
+  img.dataset.blob = url;
+  img.src = url;
+  if (done) img.dataset.done = "1";
+  const tile = img.closest(".tile");
+  if (tile) tile.classList.add("loaded");
+}
 function watchThumb(img){
   let attempt = 0;
-  const tick = () => {
+  const tick = async () => {
     if (!img.isConnected) return;
     if (img.dataset.watch !== "1") { img.dataset.started = ""; return; }
-    const probe = new Image();
-    const q = attempt ? `?r=${attempt}` : "";
-    probe.onload = () => {
-      if (!img.isConnected) return;
-      img.src = probe.src;
-      img.dataset.done = "1";
-      const tile = img.closest(".tile");
-      if (tile) tile.classList.add("loaded");
-    };
-    probe.onerror = () => {
-      if (!img.isConnected) return;
-      if (img.dataset.watch !== "1") { img.dataset.started = ""; return; }
+    let res;
+    try {
+      // v=4 drops posters the browser cached back when this URL returned the
+      // "Preview unavailable" card instead of a JPEG.
+      res = await fetch(`/thumb/${img.dataset.thumb}?v=4&r=${attempt}`);
+    } catch (e) {
       attempt += 1;
-      if (attempt > 24) { img.dataset.started = ""; return; }
-      const wait = Math.min(10000, Math.round(700 * Math.pow(1.35, attempt)));
-      setTimeout(tick, wait);
-    };
-    probe.src = `/thumb/${img.dataset.thumb}${q}`;
+      if (attempt <= 36 && img.dataset.watch === "1") setTimeout(tick, 1500);
+      return;
+    }
+    const type = res.headers.get("Content-Type") || "";
+    const state = res.headers.get("X-Thumb-State")
+      || (type.includes("jpeg") ? "ready" : (res.status === 404 ? "pending" : "failed"));
+    if (state === "ready" && res.ok) {
+      paintThumb(img, await res.blob(), true);
+      return;
+    }
+    if (!img.isConnected || img.dataset.watch !== "1") { img.dataset.started = ""; return; }
+    if (state === "failed") {
+      // The background job gave up for now. Show the stand-in, then keep
+      // asking: a later retry can still produce the JPEG (OneDrive often
+      // finishes downloading the clip after the first attempt).
+      if (!img.getAttribute("src")) img.src = "static/poster-unavailable.svg";
+      img.closest(".tile")?.classList.add("loaded");
+    }
+    attempt += 1;
+    if (attempt > 40) { img.dataset.done = "1"; return; }
+    const wait = state === "failed" ? 20000 : Math.min(8000, Math.round(700 * Math.pow(1.35, attempt)));
+    setTimeout(tick, wait);
   };
   tick();
 }
@@ -351,9 +371,20 @@ async function openModal(id){
   if(data.has_preview){
     video.classList.remove("hidden"); noPrev.classList.add("hidden");
     video.removeAttribute("poster");
-    const poster=new Image();
-    poster.onload=()=>{ if(!el("modal").classList.contains("hidden")) video.poster=poster.src; };
-    poster.src=`/thumb/${id}`;
+    const loadPoster=async(n)=>{
+      if(el("modal").classList.contains("hidden") || n>12) return;
+      try {
+        const res=await fetch(`/thumb/${id}?v=4&r=${n}`);
+        const type=res.headers.get("Content-Type")||"";
+        const state=res.headers.get("X-Thumb-State")||(type.includes("jpeg")?"ready":"pending");
+        if((state==="ready"||type.includes("jpeg")) && res.ok){
+          if(!el("modal").classList.contains("hidden")) video.poster=URL.createObjectURL(await res.blob());
+          return;
+        }
+      } catch(e) {}
+      setTimeout(()=>loadPoster(n+1), 2000);
+    };
+    loadPoster(0);
     let attempt=0;
     const loadPreview=()=>{
       video.onerror=()=>{

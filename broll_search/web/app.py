@@ -420,10 +420,6 @@ def create_app(config: Config, media: Optional[MediaEngine] = None, *,
         d["has_preview"] = media.has_ffmpeg
         return jsonify(d)
 
-    def _poster_sub(row) -> str:
-        return " · ".join(x for x in [row["shooter"], row["month_name"],
-                                      row["shot_type"]] if x)
-
     @app.route("/thumb/<int:file_id>")
     def thumb(file_id):
         # Never stat the footage file and never run ffmpeg on this request.
@@ -446,16 +442,15 @@ def create_app(config: Config, media: Optional[MediaEngine] = None, *,
             )
             resp.headers["X-Thumb-State"] = "ready"
             return resp
-        if media.thumb_state(src, mtime) != "failed":
+        # Pending and failed are both empty 404s. A 200 image is only ever a
+        # real JPEG, so a browser or the portal in front of this app cannot
+        # cache the "Preview unavailable" card in place of the poster.
+        state = "failed" if media.thumb_state(src, mtime) == "failed" else "pending"
+        if state == "pending":
             media.enqueue_thumbnail(src, mtime, front=True)
-            resp = Response(status=404)
-            resp.headers["Cache-Control"] = "no-store"
-            resp.headers["X-Thumb-State"] = "pending"
-            return resp
-        svg = media.placeholder_svg(row["filename"], _poster_sub(row))
-        resp = Response(svg, mimetype="image/svg+xml")
+        resp = Response(status=404)
         resp.headers["Cache-Control"] = "no-store"
-        resp.headers["X-Thumb-State"] = "failed"
+        resp.headers["X-Thumb-State"] = state
         return resp
 
     @app.route("/preview/<int:file_id>")
