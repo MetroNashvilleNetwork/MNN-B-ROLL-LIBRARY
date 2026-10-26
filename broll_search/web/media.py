@@ -144,39 +144,70 @@ def is_cloud_placeholder(path: str) -> bool:
 def _ffmpeg_input_names(path: str) -> list:
     """Spellings of ``path`` ffmpeg should try, in order.
 
-    This server's ffmpeg returns "Invalid argument" for backslash paths,
-    including ``C:\\...`` and ``\\\\server\\share``. Forward slashes are the
-    form it opens. The backslash spelling is only a fallback.
+    A bare ``C:/...`` or ``//server/...`` is parsed as a URL protocol, and the
+    summary line is "Invalid argument". The ``file:`` URL is what makes ffmpeg
+    open the path. The original path is the fallback for a file that is
+    already on disk.
     """
-    if not path or path.startswith("\\\\?\\"):
+    if not path or path.startswith("file:"):
         return [path] if path else []
     if path.startswith("\\\\") or path.startswith("//"):
-        rest = path[2:].replace("\\", "/")
-        forward = "//" + rest
-        native = "\\\\" + rest.replace("/", "\\")
-        return [forward] if forward == native else [forward, native]
+        rest = path[2:].lstrip("\\/").replace("\\", "/")
+        return ["file://" + rest, path]
     if len(path) > 2 and path[1] == ":":
-        forward = path.replace("\\", "/")
-        native = path.replace("/", "\\")
-        return [forward] if forward == native else [forward, native]
+        return ["file:" + path.replace("\\", "/"), path]
     return [path]
 
 
 def _rejected_spelling(err: str) -> bool:
     """True when ffmpeg refused the path text, so another spelling might work."""
     text = (err or "").lower()
+    if "protocol not found" in text or "did you mean file:" in text:
+        return True
     return "invalid argument" in text and "opening input" in text
 
 
-def _short_open_error(name: str, err: str) -> str:
-    """One short clause for the gallery status line."""
+def _norm_unc(path: str) -> str:
+    return (path or "").replace("/", "\\").rstrip("\\").lower()
+
+
+def _unc_share_root(path: str):
+    """Split ``\\\\server\\share\\tail`` into the share root and tail parts.
+
+    ``//server/share`` is accepted too. Long-path ``\\\\?\\`` names are left
+    alone. This does not touch the network.
+    """
+    raw = path or ""
+    if raw.startswith("//"):
+        raw = "\\\\" + raw[2:].replace("/", "\\")
+    if not raw.startswith("\\\\") or raw.startswith("\\\\?\\"):
+        return None, []
+    parts = [part for part in raw[2:].split("\\") if part]
+    if len(parts) < 2:
+        return None, []
+    return "\\\\" + parts[0] + "\\" + parts[1], parts[2:]
+
+
+def _short_open_error(name: str, err: str, detail: bool = False) -> str:
+    """One short clause for the gallery status line.
+
+    The first failure also keeps a slice of ffmpeg's own text. Later failures
+    stay short so the line still fits under the clip count.
+    """
     text = (err or "").replace("\n", " ").strip().lower()
-    if name.startswith("\\\\") or name.startswith("//"):
+    if name.startswith("file://") or name.startswith("\\\\") or name.startswith("//"):
         where = "share"
     else:
         where = "local file"
-    form = "slash" if "\\" not in name else "backslash"
-    if "invalid argument" in text:
+    if name.startswith("file:"):
+        form = "file-url"
+    elif "\\" not in name:
+        form = "slash"
+    else:
+        form = "backslash"
+    if "protocol not found" in text or "did you mean file:" in text:
+        why = "protocol not found"
+    elif "invalid argument" in text:
         why = "invalid argument"
     elif "access is denied" in text or "permission denied" in text:
         why = "access denied"
@@ -186,7 +217,11 @@ def _short_open_error(name: str, err: str) -> str:
         why = "timed out"
     else:
         why = (err or "failed").replace("\n", " ").strip()[:80]
-    return f"{where} {form}: {why}"
+    clause = f"{where} {form}: {why}"
+    raw = " ".join((err or "").split())
+    if detail and raw and raw.lower() not in {why, "timeout", "error"}:
+        return f"{clause} ({raw[:160]})"
+    return clause
 
 
 def _input_unreadable(err: str) -> bool:
@@ -207,9 +242,9 @@ def _input_unreadable(err: str) -> bool:
 
 
 # Prefix on failure markers. Older markers are ignored so a deploy retries
-# immediately. v5 opened both the share and the OneDrive file with
-# backslashes, and ffmpeg rejected those paths as "Invalid argument".
-_FAIL_VERSION = "v6"
+# immediately. v6 tried bare slash and backslash paths, and every one came
+# back as "Invalid argument". v7 opens file: URLs and a local share link.
+_FAIL_VERSION = "v7"
 
 
 @dataclass
@@ -257,6 +292,12 @@ class MediaEngine:
         self._poster_ok = 0
         self._poster_fail = 0
         self._poster_last_error = ""
+        # Remember a local symlink to the archive share. Checked only after a
+        # direct open is refused, and never by stating the UNC path itself.
+        self._share_link_root = ""
+        self._share_link_gave_up = ""
+        self._share_link_error = ""
+        self._share_link_lock = threading.Lock()
 
     @property
     def has_ffmpeg(self) -> bool:
@@ -331,7 +372,10 @@ class MediaEngine:
             kwargs["env"] = env
             proc = subprocess.run(cmd, timeout=timeout, **kwargs)
             err = (proc.stderr or b"").decode("utf-8", "replace").strip()
-            self._last_error = err[-400:]
+            # Keep the first lines. The specific reason ("Protocol not found",
+            # "No such file") is there; the last line is often just
+            # "Invalid argument".
+            self._last_error = err[:400]
             return "ok" if proc.returncode == 0 else "error"
         except subprocess.TimeoutExpired:
             self._last_error = "timeout"
@@ -542,6 +586,71 @@ class MediaEngine:
                 continue
         return out
 
+    def _write_share_link(self, root: str, parts: list) -> str:
+        """Point ``cache/share-link`` at ``\\\\server\\share`` and return the tail.
+
+        A marker file records the target so later posters do not stat the link.
+        Stating a symlink to a quiet UNC path can hang.
+        """
+        link = self.cache_dir / "share-link"
+        marker = self.cache_dir / "share-link-target.txt"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        recorded = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        if recorded:
+            if _norm_unc(recorded) != _norm_unc(root):
+                raise OSError("cache link points at a different share")
+        else:
+            try:
+                os.symlink(root, link, target_is_directory=True)
+            except FileExistsError:
+                pass
+            marker.write_text(root, encoding="utf-8")
+        return str(link.joinpath(*parts) if parts else link)
+
+    def _local_share_alias(self, source: str) -> Optional[str]:
+        """A local path for ``source`` that redirects to the archive share.
+
+        ffmpeg on this server rejects ``\\\\server\\share`` with "Invalid
+        argument". A directory symlink is a normal local path, so ffmpeg opens
+        that and Windows follows it to the share. Creating the link does not
+        read the share. One attempt per process: a hung or forbidden symlink
+        must not stall every poster.
+        """
+        self._share_link_error = ""
+        root, parts = _unc_share_root(source)
+        if not root:
+            return None
+        with self._share_link_lock:
+            if self._share_link_gave_up:
+                self._share_link_error = self._share_link_gave_up
+                return None
+            if self._share_link_root == root:
+                link = self.cache_dir / "share-link"
+                return str(link.joinpath(*parts) if parts else link)
+        holder: dict = {}
+
+        def _make() -> None:
+            try:
+                holder["path"] = self._write_share_link(root, parts)
+            except OSError as exc:
+                holder["error"] = str(exc).strip()[:120] or "could not create share link"
+
+        worker = threading.Thread(target=_make, name="share-link", daemon=True)
+        worker.start()
+        worker.join(3)
+        with self._share_link_lock:
+            if worker.is_alive():
+                self._share_link_gave_up = "timed out creating the share link"
+                self._share_link_error = self._share_link_gave_up
+                return None
+            error = holder.get("error")
+            if error or not holder.get("path"):
+                self._share_link_gave_up = error or "could not create share link"
+                self._share_link_error = self._share_link_gave_up
+                return None
+            self._share_link_root = root
+            return holder["path"]
+
     def _frame_command(self, source: str, tmp: Path, ss: str, vf: str, mapped: bool,
                        seek_first: bool = True) -> list:
         cmd = [self.ffmpeg, "-y", "-nostdin", "-hide_banner", "-loglevel", "error"]
@@ -563,7 +672,7 @@ class MediaEngine:
             else:
                 self._poster_fail += 1
                 if detail:
-                    self._poster_last_error = detail.replace("\n", " ")[:300]
+                    self._poster_last_error = detail.replace("\n", " ")[:480]
 
     def poster_status(self) -> dict:
         """How many posters are saved, plus the latest ffmpeg error."""
@@ -642,18 +751,26 @@ class MediaEngine:
             status = "error"
             notes = []
             share_timed_out = False
+
+            def _attempt(name: str) -> str:
+                result = self._try_frame(name, tmp, attempts)
+                if result == "ok":
+                    tmp.replace(out)
+                    self._clear_failure(self.thumbs_dir, key)
+                    self._note_poster(True)
+                    return "ok"
+                notes.append(_short_open_error(
+                    name, self._last_error or result, detail=not notes))
+                return result
+
             for source in sources:
                 is_share = source.startswith("\\\\") or source.startswith("//")
                 if share_timed_out and is_share:
                     continue
                 for name in _ffmpeg_input_names(source):
-                    status = self._try_frame(name, tmp, attempts)
+                    status = _attempt(name)
                     if status == "ok":
-                        tmp.replace(out)
-                        self._clear_failure(self.thumbs_dir, key)
-                        self._note_poster(True)
                         return True
-                    notes.append(_short_open_error(name, self._last_error or status))
                     if status == "timeout":
                         if is_share:
                             share_timed_out = True
@@ -665,6 +782,23 @@ class MediaEngine:
                     if _rejected_spelling(self._last_error):
                         continue
                     break
+                else:
+                    if is_share and not share_timed_out:
+                        alias = self._local_share_alias(source)
+                        if not alias:
+                            if self._share_link_error:
+                                notes.append(f"share link: {self._share_link_error[:100]}")
+                        else:
+                            for name in _ffmpeg_input_names(alias):
+                                status = _attempt(name)
+                                if status == "ok":
+                                    return True
+                                if status == "timeout":
+                                    share_timed_out = True
+                                    break
+                                if _rejected_spelling(self._last_error):
+                                    continue
+                                break
                 if status == "timeout" and not is_share:
                     break
             self._cleanup(tmp)
@@ -694,13 +828,25 @@ class MediaEngine:
         status = "error"
         used = path
         try:
-            for name in _ffmpeg_input_names(path):
+            names = list(_ffmpeg_input_names(path))
+            for name in names:
                 used = name
                 status = self._try_frame(name, tmp, attempts)
                 if status == "ok":
                     return {"ok": True, "input": name, "status": status, "error": ""}
                 if status != "unreadable":
                     break
+            else:
+                if (path.startswith("\\\\") or path.startswith("//")) and _rejected_spelling(self._last_error):
+                    alias = self._local_share_alias(path)
+                    if alias:
+                        for name in _ffmpeg_input_names(alias):
+                            used = name
+                            status = self._try_frame(name, tmp, attempts)
+                            if status == "ok":
+                                return {"ok": True, "input": name, "status": status, "error": ""}
+                            if status != "unreadable":
+                                break
             return {
                 "ok": False,
                 "input": used,
@@ -769,7 +915,12 @@ class MediaEngine:
             ok = False
             with self._gen_sem:
                 for source in sources:
-                    for name in _ffmpeg_input_names(source):
+                    names = list(_ffmpeg_input_names(source))
+                    tried_alias = False
+                    index = 0
+                    while index < len(names):
+                        name = names[index]
+                        index += 1
                         for vf in filters:
                             self._cleanup(tmp)
                             status = self._run(
@@ -790,6 +941,17 @@ class MediaEngine:
                                 break
                         if ok or status == "timeout" or not _input_unreadable(self._last_error):
                             break
+                        # The direct share spellings were refused. One local
+                        # link to the same share, then stop adding names.
+                        if (not tried_alias and index == len(names)
+                                and (source.startswith("\\\\") or source.startswith("//"))
+                                and _rejected_spelling(self._last_error)):
+                            tried_alias = True
+                            alias = self._local_share_alias(source)
+                            if alias:
+                                for extra in _ffmpeg_input_names(alias):
+                                    if extra not in names:
+                                        names.append(extra)
                     if ok:
                         break
             if ok and tmp.exists() and tmp.stat().st_size > 0:

@@ -308,7 +308,7 @@ class GallerySpeedTests(unittest.TestCase):
         src.write_bytes(b"video")
         key = eng._key(str(src), 9)
         (eng.thumbs_dir / f"{key}.fail").write_text(
-            f"v5\n{time.time():.0f}\nunreadable share: invalid argument\n", encoding="utf-8")
+            f"v6\n{time.time():.0f}\nunreadable share slash: invalid argument\n", encoding="utf-8")
         self.assertEqual(eng.thumb_state(str(src), 9), "pending")
         eng.enqueue_thumbnail(str(src), 9, front=True)
         self.assertEqual(eng.thumb_queue_depth(), 1)
@@ -334,7 +334,7 @@ class GallerySpeedTests(unittest.TestCase):
             os.path.exists = orig
         self.assertTrue(made)
         self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, ["//smb.data.nashville.org/MNNArchive/clip.mp4", str(local)])
+        self.assertEqual(eng.tried, ["file://smb.data.nashville.org/MNNArchive/clip.mp4", str(local)])
 
     def test_unreadable_share_does_not_retry_filters(self):
         eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-unreadable")
@@ -344,7 +344,7 @@ class GallerySpeedTests(unittest.TestCase):
         eng.source_resolver = lambda src: [share, str(local)]
         self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
         self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, ["//server/share/clip.mp4", str(local)])
+        self.assertEqual(eng.tried, ["file://server/share/clip.mp4", str(local)])
 
     def test_codec_error_tries_zscale_before_another_copy(self):
         eng = _ZscaleEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-zscale")
@@ -375,7 +375,7 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertIsNotNone(out)
         self.assertEqual(
             eng.tried,
-            ["//smb.data.nashville.org/MNNArchive/2026 Metro Nashville Archive B-Roll Footage/Aaron/July/clip.mp4"],
+            ["file://smb.data.nashville.org/MNNArchive/2026 Metro Nashville Archive B-Roll Footage/Aaron/July/clip.mp4"],
         )
 
     def test_pinned_placeholder_is_still_cloud_and_share_uses_forward_slashes(self):
@@ -385,11 +385,11 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertFalse(_attrs_are_cloud(0x20))
         share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
         self.assertEqual(_ffmpeg_input_names(share), [
-            "//smb.data.nashville.org/MNNArchive/clip.mp4",
+            "file://smb.data.nashville.org/MNNArchive/clip.mp4",
             share,
         ])
         self.assertEqual(_ffmpeg_input_names(r"C:\footage\clip.mp4"), [
-            "C:/footage/clip.mp4",
+            "file:C:/footage/clip.mp4",
             r"C:\footage\clip.mp4",
         ])
 
@@ -399,10 +399,133 @@ class GallerySpeedTests(unittest.TestCase):
         eng.source_resolver = lambda src: [share]
         self.assertTrue(eng._generate_thumbnail(share, eng._key(share, 1)))
         self.assertEqual(eng.tried, [
-            "//smb.data.nashville.org/MNNArchive/clip.mp4",
-            "//smb.data.nashville.org/MNNArchive/clip.mp4",
+            "file://smb.data.nashville.org/MNNArchive/clip.mp4",
+            "file://smb.data.nashville.org/MNNArchive/clip.mp4",
             share,
         ])
+        self.assertFalse((eng.cache_dir / "share-link-target.txt").exists())
+
+    def test_unreadable_share_does_not_make_a_link(self):
+        eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-nolink")
+        local = self.root / "clip.mp4"
+        local.write_bytes(b"video")
+        share = r"\\server\share\clip.mp4"
+        eng.source_resolver = lambda src: [share, str(local)]
+        self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
+        self.assertFalse((eng.cache_dir / "share-link-target.txt").exists())
+
+    def test_rejected_share_opens_through_the_local_link(self):
+        eng = _OnlyShareLink(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-link")
+        share = (
+            r"\\smb.data.nashville.org\MNNArchive"
+            r"\2026 Metro Nashville Archive B-Roll Footage\Aaron\clip.mp4"
+        )
+        eng.source_resolver = lambda src: [share]
+        import os
+        orig = os.path.exists
+
+        def guard(path):
+            text = str(path)
+            if text.startswith("\\\\") or text.startswith("//"):
+                raise AssertionError(f"stat'd {path}")
+            return orig(path)
+
+        os.path.exists = guard
+        try:
+            made = eng._generate_thumbnail(share, eng._key(share, 2))
+        finally:
+            os.path.exists = orig
+        self.assertTrue(made)
+        self.assertTrue(any("share-link" in name.replace("\\", "/") for name in eng.tried))
+        link = eng.cache_dir / "share-link"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), r"\\smb.data.nashville.org\MNNArchive")
+        self.assertEqual(
+            (eng.cache_dir / "share-link-target.txt").read_text(encoding="utf-8").strip(),
+            r"\\smb.data.nashville.org\MNNArchive",
+        )
+        alias = eng.tried[-1].replace("\\", "/")
+        self.assertTrue(alias.endswith("share-link/2026 Metro Nashville Archive B-Roll Footage/Aaron/clip.mp4"))
+
+    def test_share_link_failure_names_the_reason(self):
+        eng = _AlwaysRejected(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-link-fail")
+        share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
+        eng.source_resolver = lambda src: [share]
+        import os
+        orig_exists = os.path.exists
+        orig_symlink = os.symlink
+
+        def guard(path):
+            text = str(path)
+            if text.startswith("\\\\") or text.startswith("//"):
+                raise AssertionError(f"stat'd {path}")
+            return orig_exists(path)
+
+        def deny(target, dest, target_is_directory=False):
+            raise OSError("symbolic link privilege not held")
+
+        os.path.exists = guard
+        os.symlink = deny
+        try:
+            made = eng._generate_thumbnail(share, eng._key(share, 3))
+        finally:
+            os.path.exists = orig_exists
+            os.symlink = orig_symlink
+        self.assertFalse(made)
+        err = eng.poster_status()["last_error"]
+        self.assertIn("share file-url: invalid argument", err)
+        self.assertIn("Error opening input: Invalid argument", err)
+        self.assertIn("share link: symbolic link privilege not held", err)
+
+    def test_short_open_error_prefers_protocol_not_found(self):
+        from broll_search.web.media import _short_open_error
+        err = "Error opening input: Protocol not found\nDid you mean file:C:/clip.mp4?\nError opening input files: Invalid argument"
+        self.assertEqual(
+            _short_open_error(r"C:/clip.mp4", err),
+            "local file slash: protocol not found",
+        )
+        self.assertIn(
+            "No such file",
+            _short_open_error("file://server/share/clip.mp4", "No such file or directory", detail=True),
+        )
+
+    def test_real_ffmpeg_opens_a_file_url(self):
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            self.skipTest("ffmpeg is not installed")
+        src = self.root / "color-url.mp4"
+        subprocess.check_call(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=1",
+             "-pix_fmt", "yuv420p", str(src)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        eng = MediaEngine(ffmpeg_path=ffmpeg, cache_dir=self.root / "cache-url")
+        tmp = self.root / "from-url.jpg"
+        status = eng._try_frame("file:" + str(src), tmp, [("0", "scale=160:-2", False, 20)])
+        self.assertEqual(status, "ok", eng._last_error)
+        self.assertTrue(tmp.read_bytes().startswith(b"\xff\xd8"))
+
+
+class _OnlyShareLink(MediaEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tried = []
+
+    def _run(self, cmd, timeout):
+        src = cmd[cmd.index("-i") + 1]
+        self.tried.append(src)
+        if "share-link" in src.replace("\\", "/"):
+            Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+            return "ok"
+        self._last_error = "Error opening input: Invalid argument"
+        return "error"
+
+
+class _AlwaysRejected(MediaEngine):
+    def _run(self, cmd, timeout):
+        self._last_error = "Error opening input: Invalid argument"
+        return "error"
 
 
 class _InvalidThenExtended(MediaEngine):
@@ -413,7 +536,7 @@ class _InvalidThenExtended(MediaEngine):
     def _run(self, cmd, timeout):
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if not src.startswith("//"):
+        if not src.startswith("file:"):
             Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
             return "ok"
         self._last_error = "Error opening input: Invalid argument"
@@ -430,7 +553,7 @@ class _TimeoutThenOk(MediaEngine):
         self.runs += 1
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if src.startswith("\\\\") or src.startswith("//"):
+        if src.startswith("\\\\") or src.startswith("//") or src.startswith("file://"):
             self._last_error = "timeout"
             return "timeout"
         Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
@@ -447,8 +570,8 @@ class _UnreadableThenOk(MediaEngine):
         self.runs += 1
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if src.startswith("\\\\") or src.startswith("//"):
-            self._last_error = "//server/share/clip.mp4: No such file or directory"
+        if src.startswith("\\\\") or src.startswith("//") or src.startswith("file://"):
+            self._last_error = "file://server/share/clip.mp4: No such file or directory"
             return "error"
         Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
         return "ok"
