@@ -144,17 +144,21 @@ def is_cloud_placeholder(path: str) -> bool:
 def _ffmpeg_input_names(path: str) -> list:
     """Spellings of ``path`` ffmpeg should try, in order.
 
-    The native ``\\\\server\\share`` form is first. ``//server/share`` is not
-    used: on this server it makes ffmpeg return "Invalid argument" and the
-    real share path never gets a turn. ``\\\\?\\UNC\\...`` is the long-path
-    form, tried only when the native path is rejected the same way.
+    This server's ffmpeg returns "Invalid argument" for backslash paths,
+    including ``C:\\...`` and ``\\\\server\\share``. Forward slashes are the
+    form it opens. The backslash spelling is only a fallback.
     """
     if not path or path.startswith("\\\\?\\"):
         return [path] if path else []
-    if path.startswith("\\\\"):
-        return [path, "\\\\?\\UNC\\" + path[2:]]
-    if len(path) > 3 and path[1] == ":":
-        return [path, "\\\\?\\" + path]
+    if path.startswith("\\\\") or path.startswith("//"):
+        rest = path[2:].replace("\\", "/")
+        forward = "//" + rest
+        native = "\\\\" + rest.replace("/", "\\")
+        return [forward] if forward == native else [forward, native]
+    if len(path) > 2 and path[1] == ":":
+        forward = path.replace("\\", "/")
+        native = path.replace("/", "\\")
+        return [forward] if forward == native else [forward, native]
     return [path]
 
 
@@ -171,6 +175,7 @@ def _short_open_error(name: str, err: str) -> str:
         where = "share"
     else:
         where = "local file"
+    form = "slash" if "\\" not in name else "backslash"
     if "invalid argument" in text:
         why = "invalid argument"
     elif "access is denied" in text or "permission denied" in text:
@@ -181,7 +186,7 @@ def _short_open_error(name: str, err: str) -> str:
         why = "timed out"
     else:
         why = (err or "failed").replace("\n", " ").strip()[:80]
-    return f"{where}: {why}"
+    return f"{where} {form}: {why}"
 
 
 def _input_unreadable(err: str) -> bool:
@@ -202,9 +207,9 @@ def _input_unreadable(err: str) -> bool:
 
 
 # Prefix on failure markers. Older markers are ignored so a deploy retries
-# immediately. v4 still opened the OneDrive placeholder (Invalid argument)
-# and could skip the share entirely.
-_FAIL_VERSION = "v5"
+# immediately. v5 opened both the share and the OneDrive file with
+# backslashes, and ffmpeg rejected those paths as "Invalid argument".
+_FAIL_VERSION = "v6"
 
 
 @dataclass
@@ -317,7 +322,14 @@ class MediaEngine:
         """Return ``ok``, ``error``, or ``timeout``. The last stderr is kept."""
         self._last_error = ""
         try:
-            proc = subprocess.run(cmd, timeout=timeout, **_hidden_kwargs())
+            kwargs = _hidden_kwargs()
+            # MSYS ffmpeg rewrites //server/share and C:/paths unless this is set,
+            # and the rewritten path comes back as "Invalid argument".
+            env = dict(os.environ)
+            env["MSYS_NO_PATHCONV"] = "1"
+            env["MSYS2_ARG_CONV_EXCL"] = "*"
+            kwargs["env"] = env
+            proc = subprocess.run(cmd, timeout=timeout, **kwargs)
             err = (proc.stderr or b"").decode("utf-8", "replace").strip()
             self._last_error = err[-400:]
             return "ok" if proc.returncode == 0 else "error"
@@ -530,9 +542,14 @@ class MediaEngine:
                 continue
         return out
 
-    def _frame_command(self, source: str, tmp: Path, ss: str, vf: str, mapped: bool) -> list:
-        cmd = [self.ffmpeg, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
-               "-ss", ss, "-i", source]
+    def _frame_command(self, source: str, tmp: Path, ss: str, vf: str, mapped: bool,
+                       seek_first: bool = True) -> list:
+        cmd = [self.ffmpeg, "-y", "-nostdin", "-hide_banner", "-loglevel", "error"]
+        if seek_first:
+            cmd += ["-ss", ss]
+        cmd += ["-i", source]
+        if not seek_first:
+            cmd += ["-ss", ss]
         if mapped:
             cmd += ["-map", "0:v:0"]
         cmd += ["-an", "-sn", "-dn", "-frames:v", "1", "-vf", vf, "-q:v", "5", str(tmp)]
@@ -569,13 +586,18 @@ class MediaEngine:
         status = "error"
         for ss, vf, mapped, timeout in attempts:
             self._cleanup(tmp)
-            cmd = self._frame_command(source, tmp, ss, vf, mapped)
-            status = self._run(cmd, timeout=timeout)
-            if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
-                return "ok"
-            if status == "timeout":
-                return "timeout"
-            if _input_unreadable(self._last_error):
+            # -ss before -i is the fast path. If ffmpeg rejects the open,
+            # put the seek after -i once before giving up on this spelling.
+            for seek_first in (True, False):
+                cmd = self._frame_command(source, tmp, ss, vf, mapped, seek_first=seek_first)
+                status = self._run(cmd, timeout=timeout)
+                if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
+                    return "ok"
+                if status == "timeout":
+                    return "timeout"
+                if not (seek_first and _rejected_spelling(self._last_error)):
+                    break
+            if _input_unreadable(self._last_error) or _rejected_spelling(self._last_error):
                 return "unreadable"
             # Newer ffmpeg refuses a single JPEG unless -update 1 is set.
             if "update" in (self._last_error or "").lower():
