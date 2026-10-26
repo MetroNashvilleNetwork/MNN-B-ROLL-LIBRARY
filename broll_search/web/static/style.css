@@ -1,12 +1,12 @@
 /* ---- Fonts (bundled, offline): Geist sans + Fraunces serif ---- */
-@font-face { font-family:"Geist"; font-weight:400; font-display:swap; src:url("/static/fonts/geist-400.woff2") format("woff2"); }
-@font-face { font-family:"Geist"; font-weight:500; font-display:swap; src:url("/static/fonts/geist-500.woff2") format("woff2"); }
-@font-face { font-family:"Geist"; font-weight:600; font-display:swap; src:url("/static/fonts/geist-600.woff2") format("woff2"); }
-@font-face { font-family:"Geist"; font-weight:700; font-display:swap; src:url("/static/fonts/geist-700.woff2") format("woff2"); }
-@font-face { font-family:"Fraunces"; font-weight:400; font-display:swap; src:url("/static/fonts/fraunces-400.woff2") format("woff2"); }
-@font-face { font-family:"Fraunces"; font-weight:500; font-display:swap; src:url("/static/fonts/fraunces-500.woff2") format("woff2"); }
-@font-face { font-family:"Fraunces"; font-weight:600; font-display:swap; src:url("/static/fonts/fraunces-600.woff2") format("woff2"); }
-@font-face { font-family:"Fraunces"; font-weight:700; font-display:swap; src:url("/static/fonts/fraunces-700.woff2") format("woff2"); }
+@font-face { font-family:"Geist"; font-weight:400; font-display:swap; src:url("fonts/geist-400.woff2") format("woff2"); }
+@font-face { font-family:"Geist"; font-weight:500; font-display:swap; src:url("fonts/geist-500.woff2") format("woff2"); }
+@font-face { font-family:"Geist"; font-weight:600; font-display:swap; src:url("fonts/geist-600.woff2") format("woff2"); }
+@font-face { font-family:"Geist"; font-weight:700; font-display:swap; src:url("fonts/geist-700.woff2") format("woff2"); }
+@font-face { font-family:"Fraunces"; font-weight:400; font-display:swap; src:url("fonts/fraunces-400.woff2") format("woff2"); }
+@font-face { font-family:"Fraunces"; font-weight:500; font-display:swap; src:url("fonts/fraunces-500.woff2") format("woff2"); }
+@font-face { font-family:"Fraunces"; font-weight:600; font-display:swap; src:url("fonts/fraunces-600.woff2") format("woff2"); }
+@font-face { font-family:"Fraunces"; font-weight:700; font-display:swap; src:url("fonts/fraunces-700.woff2") format("woff2"); }
 
 :root {
   /* Dark black -> deep-blue palette */
