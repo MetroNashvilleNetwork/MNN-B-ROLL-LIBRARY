@@ -426,7 +426,7 @@ class GallerySpeedTests(unittest.TestCase):
             r"\\smb.data.nashville.org\MNNArchive"
             r"\2026 Metro Nashville Archive B-Roll Footage\Aaron\clip.mp4"
         )
-        eng.source_resolver = lambda src: [share]
+        eng.source_resolver = lambda src: [src]
         import os
         orig = os.path.exists
 
@@ -446,6 +446,14 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertTrue(eng.tried[-1].startswith("Y:"))
         self.assertIn("Aaron", eng.tried[-1])
         self.assertNotIn("2026", eng.tried[-1])
+        eng.tried.clear()
+        other = (
+            r"\\smb.data.nashville.org\MNNArchive"
+            r"\2026 Metro Nashville Archive B-Roll Footage\Aaron\other.mp4"
+        )
+        self.assertTrue(eng._generate_thumbnail(other, eng._key(other, 2)))
+        self.assertEqual(eng.tried, [r"Y:\Aaron\other.mp4"])
+        self.assertEqual(eng.max_concurrent, 4)
 
     def test_drive_map_failure_names_the_reason(self):
         eng = _AlwaysRejected(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-drive-fail")

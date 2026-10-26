@@ -333,7 +333,7 @@ class MediaEngine:
     cache_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "cache")
     preview_max_width: int = 640
     preview_max_seconds: int = 60
-    max_concurrent: int = 2   # simultaneous thumbnail ffmpeg jobs
+    max_concurrent: int = 4   # simultaneous thumbnail ffmpeg jobs
     thumb_max_width: int = DEFAULT_THUMB_WIDTH
     # Maps an indexed path to the paths ffmpeg should try, best first.
     # The web app points this at the archive share when the local copy is
@@ -381,6 +381,10 @@ class MediaEngine:
         self._share_listed = False
         self._share_list_names: list = []
         self._share_list_note = ""
+        # After one poster opens, later clips skip the spellings that failed.
+        # "drive-tail" is Y:\Aaron\clip.mp4. "drive-full" keeps the archive
+        # folder. ("drive-folder", name) uses a folder discovered on the drive.
+        self._fast_kind = None
 
     @property
     def has_ffmpeg(self) -> bool:
@@ -796,11 +800,84 @@ class MediaEngine:
                 paths.append(path)
         return paths
 
+    def _remember_open(self, source: str, opened: str) -> None:
+        """Remember which spelling produced a frame, so the next clip uses it."""
+        root, parts = _unc_share_root(source)
+        letter = self._share_drive_letter
+        native = opened
+        if native.lower().startswith("file:"):
+            native = native[5:].replace("/", "\\")
+        if root and letter and len(native) > 1 and native[1] == ":" and native[0].upper() == letter[0].upper():
+            rel = native[2:].lstrip("\\")
+            segs = [part for part in rel.split("\\") if part]
+            tail = parts[1:] if parts and _is_archive_folder(parts[0]) else list(parts)
+            if segs == list(parts):
+                self._fast_kind = "drive-full"
+            elif segs == tail:
+                self._fast_kind = "drive-tail"
+            elif segs and segs[1:] == tail:
+                self._fast_kind = ("drive-folder", segs[0])
+            else:
+                self._fast_kind = "drive-tail"
+            return
+        if opened.startswith("\\\\?\\"):
+            self._fast_kind = "long-unc"
+        elif source.startswith("\\\\") or source.startswith("//"):
+            self._fast_kind = "unc"
+        else:
+            self._fast_kind = "local"
+
+    def _fast_names(self, sources: list) -> list:
+        """The one path to try first, once a poster has opened."""
+        kind = self._fast_kind
+        if not kind:
+            return []
+        shares = [src for src in sources if src.startswith("\\\\") or src.startswith("//")]
+        local = [src for src in sources if src not in shares]
+        if kind == "local":
+            if not local:
+                return []
+            names = _ffmpeg_input_names(local[-1])
+            return names[:1]
+        if not shares:
+            return []
+        source = shares[0]
+        if kind == "long-unc":
+            name = _long_unc(source)
+            return [name] if name else []
+        if kind == "unc":
+            return [source]
+        root, parts = _unc_share_root(source)
+        if not root:
+            return []
+        paths = self._drive_paths(source)
+        if not paths:
+            return []
+        tail = parts[1:] if parts and _is_archive_folder(parts[0]) else list(parts)
+        want = None
+        if kind == "drive-tail":
+            want = tail
+        elif kind == "drive-full":
+            want = list(parts)
+        elif isinstance(kind, tuple) and kind and kind[0] == "drive-folder":
+            want = [kind[1]] + tail
+        if not want:
+            return paths[:1]
+        wanted = "\\".join(want)
+        for path in paths:
+            rel = path.split(":", 1)[-1].lstrip("\\/")
+            if rel.replace("/", "\\") == wanted:
+                return [path]
+        return paths[:1]
+
     def _frame_command(self, source: str, tmp: Path, ss: str, vf: str, mapped: bool,
                        seek_first: bool = True) -> list:
-        cmd = [self.ffmpeg, "-y", "-nostdin", "-hide_banner", "-loglevel", "error"]
+        # One thread per poster. Several of these run at once, and a single
+        # frame does not get faster by splitting itself across cores.
+        cmd = [self.ffmpeg, "-y", "-threads", "1", "-nostdin", "-hide_banner", "-loglevel", "error"]
         if seek_first:
-            cmd += ["-ss", ss]
+            # Grab the nearest keyframe instead of decoding up to the timestamp.
+            cmd += ["-noaccurate_seek", "-ss", ss]
         cmd += ["-i", source]
         if not seek_first:
             cmd += ["-ss", ss]
@@ -885,35 +962,74 @@ class MediaEngine:
         # clips whose first stream is not video. A timeout moves on to the
         # next copy of the file. A path ffmpeg cannot open tries the other
         # spelling of that share, then the OneDrive path.
+        scale = f"scale='min({w},iw)':-2:flags=fast_bilinear,format=yuv420p"
         attempts = [
-            ("1", f"scale='min({w},iw)':-2,format=yuv420p", True, 45),
+            ("1", scale, True, 45),
             ("1", f"zscale={w}:-2,format=yuv420p", True, 30),
             ("0", f"scale='min({w},iw)':-2", False, 30),
         ]
+        # Once a spelling has worked, only that path and the fast scale.
+        fast_attempts = [("1", scale, True, 20)]
         with self._lock_for(key):
             if out.exists() and out.stat().st_size > 0:
                 return True
             status = "error"
             notes = []
             share_timed_out = False
+            skip_full = False
 
-            def _attempt(name: str) -> str:
-                result = self._try_frame(name, tmp, attempts)
+            def _attempt(name: str, plan=None, source: str = "") -> str:
+                result = self._try_frame(name, tmp, plan or attempts)
                 if result == "ok":
                     tmp.replace(out)
                     self._clear_failure(self.thumbs_dir, key)
                     self._note_poster(True)
+                    if source:
+                        self._remember_open(source, name)
                     return "ok"
                 notes.append(_short_open_error(
                     name, self._last_error or result, detail=not notes))
                 return result
+
+            fast_names = self._fast_names(sources)
+            if fast_names:
+                fast_source = next(
+                    (src for src in sources if src.startswith("\\\\") or src.startswith("//")),
+                    sources[0],
+                )
+                if self._fast_kind == "local":
+                    fast_source = next(
+                        (src for src in sources if not src.startswith("\\\\") and not src.startswith("//")),
+                        sources[0],
+                    )
+                for name in fast_names:
+                    status = _attempt(name, fast_attempts, fast_source)
+                    if status == "ok":
+                        return True
+                    if status == "timeout":
+                        skip_full = True
+                        break
+                    if _rejected_spelling(self._last_error):
+                        self._fast_kind = None
+                        break
+                    if status != "unreadable":
+                        # The file opened and the fast scale could not convert it.
+                        status = _attempt(name, attempts[1:], fast_source)
+                        if status == "ok":
+                            return True
+                        if status == "timeout":
+                            skip_full = True
+                        break
+
+            if skip_full:
+                sources = []
 
             for source in sources:
                 is_share = source.startswith("\\\\") or source.startswith("//")
                 if share_timed_out and is_share:
                     continue
                 for name in _ffmpeg_input_names(source):
-                    status = _attempt(name)
+                    status = _attempt(name, None, source)
                     if status == "ok":
                         return True
                     if status == "timeout":
@@ -937,7 +1053,7 @@ class MediaEngine:
                             for alias in paths:
                                 # The plain Y:\ path. file:Y:/ said "not found"
                                 # for a folder that is not on this share.
-                                status = _attempt(alias)
+                                status = _attempt(alias, None, source)
                                 if status == "ok":
                                     return True
                                 if status == "timeout":
@@ -945,7 +1061,7 @@ class MediaEngine:
                                     break
                                 if not _rejected_spelling(self._last_error):
                                     continue
-                                status = _attempt("file:" + alias.replace("\\", "/"))
+                                status = _attempt("file:" + alias.replace("\\", "/"), None, source)
                                 if status == "ok":
                                     return True
                                 if status == "timeout":
