@@ -163,7 +163,7 @@ def _ffmpeg_input_names(path: str) -> list:
     UNC paths use the extended ``\\\\?\\UNC\\`` form first. ``file://server/...``
     is not used: this server's ffmpeg returns "Invalid argument" for it, and
     the log shows the URL was received intact. A drive letter is handled by
-    :meth:`MediaEngine._drive_share_alias`, not here.
+    :meth:`MediaEngine._drive_paths`, not here.
     """
     if not path or path.startswith("file:"):
         return [path] if path else []
@@ -212,6 +212,40 @@ def _unc_share_root(path: str):
     if len(parts) < 2:
         return None, []
     return "\\\\" + parts[0] + "\\" + parts[1], parts[2:]
+
+
+def _is_archive_folder(name: str) -> bool:
+    """True for the footage directory, not for a shooter folder like Aaron."""
+    low = (name or "").lower()
+    if "mnnpublic" in low or "b-roll" in low or "broll" in low:
+        return True
+    return "2026" in low and ("archive" in low or "footage" in low)
+
+
+def _drive_suffixes(parts: list, names: Optional[list] = None) -> list:
+    """Paths under a mapped drive, best first.
+
+    The drive is ``\\\\server\\MNNArchive``. The clip may live in
+    ``Y:\\2026 Metro...\\Aaron\\clip.mp4`` or directly in ``Y:\\Aaron\\clip.mp4``
+    when that share is already the footage folder. ``names`` is a directory
+    listing of the drive, used when the folder title does not match.
+    """
+    parts = [part for part in (parts or []) if part]
+    tail = parts[1:] if parts and _is_archive_folder(parts[0]) else list(parts)
+    suffixes = []
+
+    def add(segs: list) -> None:
+        segs = [seg for seg in segs if seg]
+        if segs and segs not in suffixes:
+            suffixes.append(segs)
+
+    if tail != parts:
+        add(tail)
+    add(parts)
+    for name in names or []:
+        if _is_archive_folder(name):
+            add([name] + tail)
+    return suffixes
 
 
 def _drive_letter(name: str) -> str:
@@ -287,8 +321,9 @@ def _input_unreadable(err: str) -> bool:
 # Prefix on failure markers. Older markers are ignored so a deploy retries
 # immediately. v7 opened file://server/share, and this server's ffmpeg
 # returned "Invalid argument" for that URL and for the plain UNC path.
-# v8 uses \\?\UNC\ and, if that is refused, a drive letter.
-_FAIL_VERSION = "v8"
+# v8 mapped the share and ffmpeg said the archive folder was not on it.
+# v9 also tries the clip path at the share root, and names the folders there.
+_FAIL_VERSION = "v9"
 
 
 @dataclass
@@ -343,6 +378,9 @@ class MediaEngine:
         self._share_link_gave_up = ""
         self._share_link_error = ""
         self._share_link_lock = threading.Lock()
+        self._share_listed = False
+        self._share_list_names: list = []
+        self._share_list_note = ""
 
     @property
     def has_ffmpeg(self) -> bool:
@@ -688,33 +726,75 @@ class MediaEngine:
                 raise OSError(last)
         raise OSError(last)
 
-    def _drive_share_alias(self, source: str) -> Optional[str]:
-        """``Y:\\tail`` for a UNC ``source``, mapping the share root once."""
+    def _list_dir(self, path: str):
+        """Names in ``path``, or ``([], error)``. Gives up after a few seconds.
+
+        ``path`` is a drive root such as ``Y:\\``, never a UNC path.
+        """
+        holder: dict = {}
+
+        def _read() -> None:
+            try:
+                holder["names"] = [
+                    name for name in os.listdir(path)
+                    if name not in (".", "..")
+                ]
+            except OSError as exc:
+                holder["error"] = str(exc).strip()[:160] or "could not list the share"
+
+        worker = threading.Thread(target=_read, name="share-list", daemon=True)
+        worker.start()
+        worker.join(8)
+        if worker.is_alive():
+            return [], "timed out listing the share"
+        if holder.get("error"):
+            return [], holder["error"]
+        return holder.get("names") or [], ""
+
+    def _drive_paths(self, source: str) -> list:
+        """Drive-letter paths for ``source``, shortest footage path first."""
         self._share_link_error = ""
         root, parts = _unc_share_root(source)
         if not root:
-            return None
+            return []
         with self._share_link_lock:
             if self._share_drive_root == root and self._share_drive_letter:
                 letter = self._share_drive_letter
             elif self._share_link_gave_up:
                 self._share_link_error = self._share_link_gave_up
-                return None
+                return []
             else:
                 try:
                     letter = self._net_use_map(root)
                 except subprocess.TimeoutExpired:
                     self._share_link_gave_up = "timed out mapping the share"
                     self._share_link_error = self._share_link_gave_up
-                    return None
+                    return []
                 except OSError as exc:
                     self._share_link_gave_up = str(exc).strip()[:160] or "could not map the share"
                     self._share_link_error = self._share_link_gave_up
-                    return None
+                    return []
                 self._share_drive_root = root
                 self._share_drive_letter = letter
-        tail = "\\".join(parts)
-        return f"{letter}\\{tail}" if tail else letter + "\\"
+            if not self._share_listed:
+                names, err = self._list_dir(letter + "\\")
+                self._share_listed = True
+                self._share_list_names = list(names)
+                if names:
+                    shown = ", ".join(names[:12])
+                    self._share_list_note = f"share folders: {shown[:240]}"
+                elif err:
+                    self._share_list_note = f"share folders: {err[:160]}"
+                else:
+                    self._share_list_note = "share folders: (empty)"
+            names = self._share_list_names
+        paths = []
+        for segs in _drive_suffixes(parts, names):
+            tail = "\\".join(segs)
+            path = f"{letter}\\{tail}" if tail else letter + "\\"
+            if path not in paths:
+                paths.append(path)
+        return paths
 
     def _frame_command(self, source: str, tmp: Path, ss: str, vf: str, mapped: bool,
                        seek_first: bool = True) -> list:
@@ -737,7 +817,7 @@ class MediaEngine:
             else:
                 self._poster_fail += 1
                 if detail:
-                    self._poster_last_error = detail.replace("\n", " ")[:480]
+                    self._poster_last_error = detail.replace("\n", " ")[:700]
 
     def poster_status(self) -> dict:
         """How many posters are saved, plus the latest ffmpeg error."""
@@ -849,21 +929,31 @@ class MediaEngine:
                     break
                 else:
                     if is_share and not share_timed_out:
-                        alias = self._drive_share_alias(source)
-                        if not alias:
+                        paths = self._drive_paths(source)
+                        if not paths:
                             if self._share_link_error:
                                 notes.append(f"share drive: {self._share_link_error[:120]}")
                         else:
-                            for name in _ffmpeg_input_names(alias):
-                                status = _attempt(name)
+                            for alias in paths:
+                                # The plain Y:\ path. file:Y:/ said "not found"
+                                # for a folder that is not on this share.
+                                status = _attempt(alias)
                                 if status == "ok":
                                     return True
                                 if status == "timeout":
                                     share_timed_out = True
                                     break
-                                if _rejected_spelling(self._last_error):
+                                if not _rejected_spelling(self._last_error):
                                     continue
-                                break
+                                status = _attempt("file:" + alias.replace("\\", "/"))
+                                if status == "ok":
+                                    return True
+                                if status == "timeout":
+                                    share_timed_out = True
+                                    break
+                            if self._share_list_note and not any(
+                                    note.startswith("share folders:") for note in notes):
+                                notes.append(self._share_list_note)
                 if status == "timeout" and not is_share:
                     break
             self._cleanup(tmp)
@@ -903,15 +993,13 @@ class MediaEngine:
                     break
             else:
                 if (path.startswith("\\\\") or path.startswith("//")) and _rejected_spelling(self._last_error):
-                    alias = self._drive_share_alias(path)
-                    if alias:
-                        for name in _ffmpeg_input_names(alias):
-                            used = name
-                            status = self._try_frame(name, tmp, attempts)
-                            if status == "ok":
-                                return {"ok": True, "input": name, "status": status, "error": ""}
-                            if status != "unreadable":
-                                break
+                    for name in self._drive_paths(path):
+                        used = name
+                        status = self._try_frame(name, tmp, attempts)
+                        if status == "ok":
+                            return {"ok": True, "input": name, "status": status, "error": ""}
+                        if status != "unreadable":
+                            break
             return {
                 "ok": False,
                 "input": used,
@@ -1012,11 +1100,9 @@ class MediaEngine:
                                 and (source.startswith("\\\\") or source.startswith("//"))
                                 and _rejected_spelling(self._last_error)):
                             tried_alias = True
-                            alias = self._drive_share_alias(source)
-                            if alias:
-                                for extra in _ffmpeg_input_names(alias):
-                                    if extra not in names:
-                                        names.append(extra)
+                            for extra in self._drive_paths(source):
+                                if extra not in names:
+                                    names.append(extra)
                     if ok:
                         break
             if ok and tmp.exists() and tmp.stat().st_size > 0:

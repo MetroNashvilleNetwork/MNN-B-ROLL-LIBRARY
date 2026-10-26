@@ -443,9 +443,9 @@ class GallerySpeedTests(unittest.TestCase):
             os.path.exists = orig
         self.assertTrue(made)
         self.assertEqual(eng.mapped, r"\\smb.data.nashville.org\MNNArchive")
-        self.assertTrue(eng.tried[-1].startswith("file:Y:/") or eng.tried[-1].startswith("Y:"))
-        self.assertIn("2026 Metro Nashville Archive B-Roll Footage", eng.tried[-1])
+        self.assertTrue(eng.tried[-1].startswith("Y:"))
         self.assertIn("Aaron", eng.tried[-1])
+        self.assertNotIn("2026", eng.tried[-1])
 
     def test_drive_map_failure_names_the_reason(self):
         eng = _AlwaysRejected(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-drive-fail")
@@ -461,6 +461,34 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertIn("share long-path: invalid argument", err)
         self.assertIn("Error opening input: Invalid argument", err)
         self.assertIn("share drive: System error 53 has occurred.", err)
+
+    def test_drive_paths_try_the_share_root_before_the_archive_folder(self):
+        from broll_search.web.media import _drive_suffixes
+        parts = [
+            "2026 Metro Nashville Archive B-Roll Footage",
+            "Aaron", "July", "clip.mp4",
+        ]
+        suffixes = _drive_suffixes(parts, ["Council", "MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"])
+        self.assertEqual(suffixes[0], ["Aaron", "July", "clip.mp4"])
+        self.assertEqual(suffixes[1], parts)
+        self.assertEqual(
+            suffixes[2],
+            ["MNNPublic - 2026 Metro Nashville Archive B-Roll Footage", "Aaron", "July", "clip.mp4"],
+        )
+
+    def test_missing_drive_file_names_the_folders(self):
+        eng = _FoldersThenMissing(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-folders")
+        share = (
+            r"\\smb.data.nashville.org\MNNArchive"
+            r"\2026 Metro Nashville Archive B-Roll Footage\Aaron\July\clip.mp4"
+        )
+        eng.source_resolver = lambda src: [share]
+        self.assertFalse(eng._generate_thumbnail(share, eng._key(share, 5)))
+        err = eng.poster_status()["last_error"]
+        self.assertIn("share folders: 2024 Reels, Council Meetings", err)
+        drive_paths = [name for name in eng.tried if name.startswith("Y:")]
+        self.assertTrue(drive_paths)
+        self.assertTrue(drive_paths[0].endswith("Aaron\\July\\clip.mp4"))
 
     def test_existing_net_use_letter_is_reused(self):
         eng = MediaEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-net")
@@ -503,6 +531,27 @@ class GallerySpeedTests(unittest.TestCase):
         status = eng._try_frame("file:" + str(src), tmp, [("0", "scale=160:-2", False, 20)])
         self.assertEqual(status, "ok", eng._last_error)
         self.assertTrue(tmp.read_bytes().startswith(b"\xff\xd8"))
+
+
+class _FoldersThenMissing(MediaEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tried = []
+
+    def _net_use_map(self, root):
+        return "Y:"
+
+    def _list_dir(self, path):
+        return ["2024 Reels", "Council Meetings"], ""
+
+    def _run(self, cmd, timeout):
+        src = cmd[cmd.index("-i") + 1]
+        self.tried.append(src)
+        if src.startswith("Y:") or src.startswith("file:Y:"):
+            self._last_error = src + ": No such file or directory"
+            return "error"
+        self._last_error = "Error opening input: Invalid argument"
+        return "error"
 
 
 class _OnlyShareDrive(MediaEngine):
