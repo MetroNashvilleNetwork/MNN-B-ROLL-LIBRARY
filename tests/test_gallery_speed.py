@@ -334,7 +334,10 @@ class GallerySpeedTests(unittest.TestCase):
             os.path.exists = orig
         self.assertTrue(made)
         self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, ["file://smb.data.nashville.org/MNNArchive/clip.mp4", str(local)])
+        self.assertEqual(eng.tried, [
+            r"\\?\UNC\smb.data.nashville.org\MNNArchive\clip.mp4",
+            str(local),
+        ])
 
     def test_unreadable_share_does_not_retry_filters(self):
         eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-unreadable")
@@ -344,7 +347,7 @@ class GallerySpeedTests(unittest.TestCase):
         eng.source_resolver = lambda src: [share, str(local)]
         self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
         self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, ["file://server/share/clip.mp4", str(local)])
+        self.assertEqual(eng.tried, [r"\\?\UNC\server\share\clip.mp4", str(local)])
 
     def test_codec_error_tries_zscale_before_another_copy(self):
         eng = _ZscaleEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-zscale")
@@ -375,7 +378,7 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertIsNotNone(out)
         self.assertEqual(
             eng.tried,
-            ["file://smb.data.nashville.org/MNNArchive/2026 Metro Nashville Archive B-Roll Footage/Aaron/July/clip.mp4"],
+            [r"\\?\UNC\smb.data.nashville.org\MNNArchive\2026 Metro Nashville Archive B-Roll Footage\Aaron\July\clip.mp4"],
         )
 
     def test_pinned_placeholder_is_still_cloud_and_share_uses_forward_slashes(self):
@@ -385,7 +388,7 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertFalse(_attrs_are_cloud(0x20))
         share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
         self.assertEqual(_ffmpeg_input_names(share), [
-            "file://smb.data.nashville.org/MNNArchive/clip.mp4",
+            r"\\?\UNC\smb.data.nashville.org\MNNArchive\clip.mp4",
             share,
         ])
         self.assertEqual(_ffmpeg_input_names(r"C:\footage\clip.mp4"), [
@@ -399,23 +402,26 @@ class GallerySpeedTests(unittest.TestCase):
         eng.source_resolver = lambda src: [share]
         self.assertTrue(eng._generate_thumbnail(share, eng._key(share, 1)))
         self.assertEqual(eng.tried, [
-            "file://smb.data.nashville.org/MNNArchive/clip.mp4",
-            "file://smb.data.nashville.org/MNNArchive/clip.mp4",
+            r"\\?\UNC\smb.data.nashville.org\MNNArchive\clip.mp4",
+            r"\\?\UNC\smb.data.nashville.org\MNNArchive\clip.mp4",
             share,
         ])
-        self.assertFalse((eng.cache_dir / "share-link-target.txt").exists())
 
-    def test_unreadable_share_does_not_make_a_link(self):
+    def test_unreadable_share_does_not_map_a_drive(self):
         eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-nolink")
         local = self.root / "clip.mp4"
         local.write_bytes(b"video")
         share = r"\\server\share\clip.mp4"
         eng.source_resolver = lambda src: [share, str(local)]
-        self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
-        self.assertFalse((eng.cache_dir / "share-link-target.txt").exists())
 
-    def test_rejected_share_opens_through_the_local_link(self):
-        eng = _OnlyShareLink(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-link")
+        def boom(root):
+            raise AssertionError(f"mapped {root}")
+
+        eng._net_use_map = boom
+        self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
+
+    def test_rejected_share_opens_through_a_drive_letter(self):
+        eng = _OnlyShareDrive(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-drive")
         share = (
             r"\\smb.data.nashville.org\MNNArchive"
             r"\2026 Metro Nashville Archive B-Roll Footage\Aaron\clip.mp4"
@@ -436,46 +442,38 @@ class GallerySpeedTests(unittest.TestCase):
         finally:
             os.path.exists = orig
         self.assertTrue(made)
-        self.assertTrue(any("share-link" in name.replace("\\", "/") for name in eng.tried))
-        link = eng.cache_dir / "share-link"
-        self.assertTrue(link.is_symlink())
-        self.assertEqual(os.readlink(link), r"\\smb.data.nashville.org\MNNArchive")
-        self.assertEqual(
-            (eng.cache_dir / "share-link-target.txt").read_text(encoding="utf-8").strip(),
-            r"\\smb.data.nashville.org\MNNArchive",
-        )
-        alias = eng.tried[-1].replace("\\", "/")
-        self.assertTrue(alias.endswith("share-link/2026 Metro Nashville Archive B-Roll Footage/Aaron/clip.mp4"))
+        self.assertEqual(eng.mapped, r"\\smb.data.nashville.org\MNNArchive")
+        self.assertTrue(eng.tried[-1].startswith("file:Y:/") or eng.tried[-1].startswith("Y:"))
+        self.assertIn("2026 Metro Nashville Archive B-Roll Footage", eng.tried[-1])
+        self.assertIn("Aaron", eng.tried[-1])
 
-    def test_share_link_failure_names_the_reason(self):
-        eng = _AlwaysRejected(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-link-fail")
+    def test_drive_map_failure_names_the_reason(self):
+        eng = _AlwaysRejected(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-drive-fail")
         share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
         eng.source_resolver = lambda src: [share]
-        import os
-        orig_exists = os.path.exists
-        orig_symlink = os.symlink
 
-        def guard(path):
-            text = str(path)
-            if text.startswith("\\\\") or text.startswith("//"):
-                raise AssertionError(f"stat'd {path}")
-            return orig_exists(path)
+        def deny(root):
+            raise OSError("System error 53 has occurred.")
 
-        def deny(target, dest, target_is_directory=False):
-            raise OSError("symbolic link privilege not held")
-
-        os.path.exists = guard
-        os.symlink = deny
-        try:
-            made = eng._generate_thumbnail(share, eng._key(share, 3))
-        finally:
-            os.path.exists = orig_exists
-            os.symlink = orig_symlink
-        self.assertFalse(made)
+        eng._net_use_map = deny
+        self.assertFalse(eng._generate_thumbnail(share, eng._key(share, 3)))
         err = eng.poster_status()["last_error"]
-        self.assertIn("share file-url: invalid argument", err)
+        self.assertIn("share long-path: invalid argument", err)
         self.assertIn("Error opening input: Invalid argument", err)
-        self.assertIn("share link: symbolic link privilege not held", err)
+        self.assertIn("share drive: System error 53 has occurred.", err)
+
+    def test_existing_net_use_letter_is_reused(self):
+        eng = MediaEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-net")
+        text = (
+            "Status       Local     Remote\n"
+            "OK           Z:        \\\\other\\share\n"
+            "OK           Y:        \\\\smb.data.nashville.org\\MNNArchive\n"
+        )
+        self.assertEqual(
+            eng._drive_from_net_use(text, r"\\smb.data.nashville.org\MNNArchive"),
+            "Y:",
+        )
+        self.assertEqual(eng._drive_from_net_use(text, r"\\missing\share"), "")
 
     def test_short_open_error_prefers_protocol_not_found(self):
         from broll_search.web.media import _short_open_error
@@ -507,15 +505,20 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertTrue(tmp.read_bytes().startswith(b"\xff\xd8"))
 
 
-class _OnlyShareLink(MediaEngine):
+class _OnlyShareDrive(MediaEngine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tried = []
+        self.mapped = ""
+
+    def _net_use_map(self, root):
+        self.mapped = root
+        return "Y:"
 
     def _run(self, cmd, timeout):
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if "share-link" in src.replace("\\", "/"):
+        if src.startswith("Y:") or src.startswith("file:Y:"):
             Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
             return "ok"
         self._last_error = "Error opening input: Invalid argument"
@@ -536,7 +539,7 @@ class _InvalidThenExtended(MediaEngine):
     def _run(self, cmd, timeout):
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if not src.startswith("file:"):
+        if not src.startswith("file:") and not src.startswith("\\\\?\\"):
             Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
             return "ok"
         self._last_error = "Error opening input: Invalid argument"

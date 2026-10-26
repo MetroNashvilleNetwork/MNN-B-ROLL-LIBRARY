@@ -27,7 +27,7 @@ from .media import MediaEngine, _hidden_kwargs, is_cloud_placeholder
 # Bump this string on every push that touches the server so we can confirm, from
 # the browser, that the server actually pulled the latest code. If /doctor shows
 # an old marker, the GitHub sync is behind and no code fix will take effect.
-BUILD_MARKER = "2026-10-26 file-url-open"
+BUILD_MARKER = "2026-10-26 map-archive-drive"
 
 
 def _run_capture(cmd: list, timeout: float) -> dict:

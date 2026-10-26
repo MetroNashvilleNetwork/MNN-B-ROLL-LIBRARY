@@ -141,19 +141,45 @@ def is_cloud_placeholder(path: str) -> bool:
         return False
 
 
+def _long_unc(path: str) -> str:
+    """``\\\\?\\UNC\\server\\share\\tail`` for a UNC path, or "" .
+
+    The Windows C runtime returns "Invalid argument" for ``\\\\server\\share``
+    and for ``file://server/share``. The ``\\\\?\\UNC\\`` prefix is the form
+    ``_wsopen`` accepts. This does not touch the network.
+    """
+    root, parts = _unc_share_root(path)
+    if not root:
+        return ""
+    extended = "\\\\?\\UNC\\" + root[2:]
+    if parts:
+        extended += "\\" + "\\".join(parts)
+    return extended
+
+
 def _ffmpeg_input_names(path: str) -> list:
     """Spellings of ``path`` ffmpeg should try, in order.
 
-    A bare ``C:/...`` or ``//server/...`` is parsed as a URL protocol, and the
-    summary line is "Invalid argument". The ``file:`` URL is what makes ffmpeg
-    open the path. The original path is the fallback for a file that is
-    already on disk.
+    UNC paths use the extended ``\\\\?\\UNC\\`` form first. ``file://server/...``
+    is not used: this server's ffmpeg returns "Invalid argument" for it, and
+    the log shows the URL was received intact. A drive letter is handled by
+    :meth:`MediaEngine._drive_share_alias`, not here.
     """
     if not path or path.startswith("file:"):
         return [path] if path else []
+    if path.startswith("\\\\?\\") or path.startswith("//?/") :
+        return [path]
     if path.startswith("\\\\") or path.startswith("//"):
-        rest = path[2:].lstrip("\\/").replace("\\", "/")
-        return ["file://" + rest, path]
+        names = []
+        extended = _long_unc(path)
+        if extended:
+            names.append(extended)
+        native = path
+        if path.startswith("//"):
+            native = "\\\\" + path[2:].replace("/", "\\")
+        if native not in names:
+            names.append(native)
+        return names or [path]
     if len(path) > 2 and path[1] == ":":
         return ["file:" + path.replace("\\", "/"), path]
     return [path]
@@ -188,6 +214,15 @@ def _unc_share_root(path: str):
     return "\\\\" + parts[0] + "\\" + parts[1], parts[2:]
 
 
+def _drive_letter(name: str) -> str:
+    """``Y`` for ``Y:\\...`` or ``file:Y:/...``. Empty when it is not a drive."""
+    if name.startswith("file:") and len(name) > 6 and name[5].isalpha() and name[6] == ":":
+        return name[5].upper()
+    if len(name) > 1 and name[0].isalpha() and name[1] == ":":
+        return name[0].upper()
+    return ""
+
+
 def _short_open_error(name: str, err: str, detail: bool = False) -> str:
     """One short clause for the gallery status line.
 
@@ -195,16 +230,24 @@ def _short_open_error(name: str, err: str, detail: bool = False) -> str:
     stay short so the line still fits under the clip count.
     """
     text = (err or "").replace("\n", " ").strip().lower()
-    if name.startswith("file://") or name.startswith("\\\\") or name.startswith("//"):
+    letter = _drive_letter(name)
+    extended = name.startswith("\\\\?\\") or name.startswith("//?/")
+    if extended:
+        where, form = "share", "long-path"
+    elif letter and letter != "C":
+        where, form = "share", "drive"
+    elif name.startswith("file://") or name.startswith("\\\\") or name.startswith("//"):
         where = "share"
+        form = ""
     else:
-        where = "local file"
-    if name.startswith("file:"):
-        form = "file-url"
-    elif "\\" not in name:
-        form = "slash"
-    else:
-        form = "backslash"
+        where, form = "local file", ""
+    if not form:
+        if name.startswith("file:"):
+            form = "file-url"
+        elif "\\" not in name:
+            form = "slash"
+        else:
+            form = "backslash"
     if "protocol not found" in text or "did you mean file:" in text:
         why = "protocol not found"
     elif "invalid argument" in text:
@@ -242,9 +285,10 @@ def _input_unreadable(err: str) -> bool:
 
 
 # Prefix on failure markers. Older markers are ignored so a deploy retries
-# immediately. v6 tried bare slash and backslash paths, and every one came
-# back as "Invalid argument". v7 opens file: URLs and a local share link.
-_FAIL_VERSION = "v7"
+# immediately. v7 opened file://server/share, and this server's ffmpeg
+# returned "Invalid argument" for that URL and for the plain UNC path.
+# v8 uses \\?\UNC\ and, if that is refused, a drive letter.
+_FAIL_VERSION = "v8"
 
 
 @dataclass
@@ -292,9 +336,10 @@ class MediaEngine:
         self._poster_ok = 0
         self._poster_fail = 0
         self._poster_last_error = ""
-        # Remember a local symlink to the archive share. Checked only after a
-        # direct open is refused, and never by stating the UNC path itself.
-        self._share_link_root = ""
+        # Drive letter for the archive share. Mapped only after ffmpeg refuses
+        # the UNC path. Never stat the UNC path itself.
+        self._share_drive_letter = ""
+        self._share_drive_root = ""
         self._share_link_gave_up = ""
         self._share_link_error = ""
         self._share_link_lock = threading.Lock()
@@ -364,11 +409,12 @@ class MediaEngine:
         self._last_error = ""
         try:
             kwargs = _hidden_kwargs()
-            # MSYS ffmpeg rewrites //server/share and C:/paths unless this is set,
-            # and the rewritten path comes back as "Invalid argument".
+            # MSYS ffmpeg rewrites UNC paths in the parent process unless this
+            # is set before the spawn. The rewritten path comes back as
+            # "Invalid argument".
+            os.environ["MSYS_NO_PATHCONV"] = "1"
+            os.environ["MSYS2_ARG_CONV_EXCL"] = "*"
             env = dict(os.environ)
-            env["MSYS_NO_PATHCONV"] = "1"
-            env["MSYS2_ARG_CONV_EXCL"] = "*"
             kwargs["env"] = env
             proc = subprocess.run(cmd, timeout=timeout, **kwargs)
             err = (proc.stderr or b"").decode("utf-8", "replace").strip()
@@ -586,70 +632,89 @@ class MediaEngine:
                 continue
         return out
 
-    def _write_share_link(self, root: str, parts: list) -> str:
-        """Point ``cache/share-link`` at ``\\\\server\\share`` and return the tail.
+    def _drive_from_net_use(self, text: str, root: str) -> str:
+        """Return ``Y:`` when ``net use`` already lists ``root``. Empty if not."""
+        wanted = _norm_unc(root)
+        for line in (text or "").splitlines():
+            letter = ""
+            remote = ""
+            for part in line.split():
+                if len(part) == 2 and part[1] == ":" and part[0].isalpha():
+                    letter = part.upper()
+                elif part.startswith("\\\\") or part.startswith("//"):
+                    remote = part
+            if letter and remote and _norm_unc(remote) == wanted:
+                return letter
+        return ""
 
-        A marker file records the target so later posters do not stat the link.
-        Stating a symlink to a quiet UNC path can hang.
+    def _net_use_map(self, root: str) -> str:
+        """Map ``\\\\server\\share`` to a drive letter and return ``Y:``.
+
+        ffmpeg on this server cannot open a UNC path (``_wsopen`` returns
+        "Invalid argument"). A drive letter is a normal path. One attempt per
+        process so a quiet share cannot stall every poster. Does not stat the
+        UNC path and does not put a password on the command line.
         """
-        link = self.cache_dir / "share-link"
-        marker = self.cache_dir / "share-link-target.txt"
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        recorded = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
-        if recorded:
-            if _norm_unc(recorded) != _norm_unc(root):
-                raise OSError("cache link points at a different share")
-        else:
-            try:
-                os.symlink(root, link, target_is_directory=True)
-            except FileExistsError:
-                pass
-            marker.write_text(root, encoding="utf-8")
-        return str(link.joinpath(*parts) if parts else link)
+        if os.name != "nt":
+            raise OSError("no drive mapping on this system")
+        net = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "net.exe")
+        kwargs = _hidden_kwargs()
+        listed = subprocess.run([net, "use"], timeout=8, **kwargs)
+        text = (listed.stdout or b"").decode("utf-8", "replace")
+        existing = self._drive_from_net_use(text, root)
+        if existing:
+            return existing
+        used = set()
+        for line in text.splitlines():
+            for part in line.split():
+                if len(part) == 2 and part[1] == ":" and part[0].isalpha():
+                    used.add(part[0].upper())
+        last = "no free drive letter"
+        for letter_name in "YXWVUTSRQPONMLKJIHGFED":
+            if letter_name in used:
+                continue
+            letter = letter_name + ":"
+            proc = subprocess.run(
+                [net, "use", letter, root, "/persistent:no"],
+                timeout=8, **kwargs,
+            )
+            blob = ((proc.stdout or b"") + b" " + (proc.stderr or b"")).decode("utf-8", "replace")
+            if proc.returncode == 0:
+                return letter
+            last = " ".join(blob.split())[:160] or f"net use failed ({proc.returncode})"
+            # 85 means this letter is taken. Any other error is the share
+            # itself, so don't walk the rest of the alphabet.
+            if "system error 85" not in last.lower() and "already in use" not in last.lower():
+                raise OSError(last)
+        raise OSError(last)
 
-    def _local_share_alias(self, source: str) -> Optional[str]:
-        """A local path for ``source`` that redirects to the archive share.
-
-        ffmpeg on this server rejects ``\\\\server\\share`` with "Invalid
-        argument". A directory symlink is a normal local path, so ffmpeg opens
-        that and Windows follows it to the share. Creating the link does not
-        read the share. One attempt per process: a hung or forbidden symlink
-        must not stall every poster.
-        """
+    def _drive_share_alias(self, source: str) -> Optional[str]:
+        """``Y:\\tail`` for a UNC ``source``, mapping the share root once."""
         self._share_link_error = ""
         root, parts = _unc_share_root(source)
         if not root:
             return None
         with self._share_link_lock:
-            if self._share_link_gave_up:
+            if self._share_drive_root == root and self._share_drive_letter:
+                letter = self._share_drive_letter
+            elif self._share_link_gave_up:
                 self._share_link_error = self._share_link_gave_up
                 return None
-            if self._share_link_root == root:
-                link = self.cache_dir / "share-link"
-                return str(link.joinpath(*parts) if parts else link)
-        holder: dict = {}
-
-        def _make() -> None:
-            try:
-                holder["path"] = self._write_share_link(root, parts)
-            except OSError as exc:
-                holder["error"] = str(exc).strip()[:120] or "could not create share link"
-
-        worker = threading.Thread(target=_make, name="share-link", daemon=True)
-        worker.start()
-        worker.join(3)
-        with self._share_link_lock:
-            if worker.is_alive():
-                self._share_link_gave_up = "timed out creating the share link"
-                self._share_link_error = self._share_link_gave_up
-                return None
-            error = holder.get("error")
-            if error or not holder.get("path"):
-                self._share_link_gave_up = error or "could not create share link"
-                self._share_link_error = self._share_link_gave_up
-                return None
-            self._share_link_root = root
-            return holder["path"]
+            else:
+                try:
+                    letter = self._net_use_map(root)
+                except subprocess.TimeoutExpired:
+                    self._share_link_gave_up = "timed out mapping the share"
+                    self._share_link_error = self._share_link_gave_up
+                    return None
+                except OSError as exc:
+                    self._share_link_gave_up = str(exc).strip()[:160] or "could not map the share"
+                    self._share_link_error = self._share_link_gave_up
+                    return None
+                self._share_drive_root = root
+                self._share_drive_letter = letter
+        tail = "\\".join(parts)
+        return f"{letter}\\{tail}" if tail else letter + "\\"
 
     def _frame_command(self, source: str, tmp: Path, ss: str, vf: str, mapped: bool,
                        seek_first: bool = True) -> list:
@@ -784,10 +849,10 @@ class MediaEngine:
                     break
                 else:
                     if is_share and not share_timed_out:
-                        alias = self._local_share_alias(source)
+                        alias = self._drive_share_alias(source)
                         if not alias:
                             if self._share_link_error:
-                                notes.append(f"share link: {self._share_link_error[:100]}")
+                                notes.append(f"share drive: {self._share_link_error[:120]}")
                         else:
                             for name in _ffmpeg_input_names(alias):
                                 status = _attempt(name)
@@ -838,7 +903,7 @@ class MediaEngine:
                     break
             else:
                 if (path.startswith("\\\\") or path.startswith("//")) and _rejected_spelling(self._last_error):
-                    alias = self._local_share_alias(path)
+                    alias = self._drive_share_alias(path)
                     if alias:
                         for name in _ffmpeg_input_names(alias):
                             used = name
@@ -941,13 +1006,13 @@ class MediaEngine:
                                 break
                         if ok or status == "timeout" or not _input_unreadable(self._last_error):
                             break
-                        # The direct share spellings were refused. One local
-                        # link to the same share, then stop adding names.
+                        # The UNC spellings were refused. A drive letter is the
+                        # form this ffmpeg can open. Add it once.
                         if (not tried_alias and index == len(names)
                                 and (source.startswith("\\\\") or source.startswith("//"))
                                 and _rejected_spelling(self._last_error)):
                             tried_alias = True
-                            alias = self._local_share_alias(source)
+                            alias = self._drive_share_alias(source)
                             if alias:
                                 for extra in _ffmpeg_input_names(alias):
                                     if extra not in names:
