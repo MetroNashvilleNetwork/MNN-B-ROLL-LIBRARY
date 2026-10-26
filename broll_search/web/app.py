@@ -383,10 +383,26 @@ def create_app(config: Config, media: Optional[MediaEngine] = None, *,
                 "filters": filters_payload(con),
                 "sections": home_sections(con, limit),
                 "build": doctor_mod.BUILD_MARKER,
+                "posters": media.poster_status(),
             }
         finally:
             con.close()
         resp = jsonify(payload)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @app.route("/api/posters")
+    def api_posters():
+        """Poster progress. Local cache only — it does not touch the footage share."""
+        con = get_db()
+        try:
+            total = db.file_count(con)
+        finally:
+            con.close()
+        body = media.poster_status()
+        body["total"] = total
+        body["build"] = doctor_mod.BUILD_MARKER
+        resp = jsonify(body)
         resp.headers["Cache-Control"] = "no-store"
         return resp
 

@@ -132,6 +132,7 @@ select option { background:var(--elev); }
 .suggest:hover { background:rgba(43,168,232,.16); border-color:var(--brand); color:#fff; }
 .hero-stat { margin-top:22px; color:var(--muted); font-size:13px; }
 .hero-stat b { color:var(--ink); }
+.hero-note { display:block; margin-top:6px; color:var(--muted); max-width:640px; }
 
 /* search-term highlight */
 mark { background:rgba(43,168,232,.32); color:#fff; border-radius:3px; padding:0 2px; }

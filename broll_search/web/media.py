@@ -73,33 +73,89 @@ def _hidden_kwargs() -> dict:
     return kwargs
 
 
+def _attrs_are_cloud(attrs: int, reparse_tag: int = 0) -> bool:
+    """True when Windows file attributes describe an online-only cloud file.
+
+    ``FILE_ATTRIBUTE_PINNED`` is not enough to call a file local. A pinned
+    placeholder can still be dehydrated, and opening it downloads the clip.
+    """
+    if attrs in (0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF):
+        return False
+    attrs = int(attrs)
+    offline = 0x1000
+    reparse_point = 0x400
+    recall_on_open = 0x40000
+    recall_on_data = 0x400000
+    if attrs & (offline | recall_on_open | recall_on_data):
+        return True
+    # IO_REPARSE_TAG_CLOUD through IO_REPARSE_TAG_CLOUD_9.
+    return bool((attrs & reparse_point) and (int(reparse_tag) & 0xFFFF0FFF) == 0x9000001A)
+
+
 def is_cloud_placeholder(path: str) -> bool:
     """True when Windows says this path is an online-only OneDrive file.
 
     ``exists()`` is true for those placeholders, but opening them downloads
-    the whole clip. A pinned or fully hydrated file is local. Other platforms
-    have no cloud-files attribute, so this is always false there.
+    the whole clip. Other platforms have no cloud-files attribute, so this
+    is always false there.
     """
     if os.name != "nt" or not path:
         return False
     try:
         import ctypes
         from ctypes import wintypes
-        get_attrs = ctypes.windll.kernel32.GetFileAttributesW
+        kernel = ctypes.windll.kernel32
+
+        class _FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+        class _FIND_DATA(ctypes.Structure):
+            _fields_ = [
+                ("dwFileAttributes", wintypes.DWORD),
+                ("ftCreationTime", _FILETIME),
+                ("ftLastAccessTime", _FILETIME),
+                ("ftLastWriteTime", _FILETIME),
+                ("nFileSizeHigh", wintypes.DWORD),
+                ("nFileSizeLow", wintypes.DWORD),
+                ("dwReserved0", wintypes.DWORD),
+                ("dwReserved1", wintypes.DWORD),
+                ("cFileName", wintypes.WCHAR * 260),
+                ("cAlternateFileName", wintypes.WCHAR * 14),
+            ]
+
+        data = _FIND_DATA()
+        kernel.FindFirstFileW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_FIND_DATA)]
+        kernel.FindFirstFileW.restype = ctypes.c_void_p
+        kernel.FindClose.argtypes = [ctypes.c_void_p]
+        kernel.FindClose.restype = wintypes.BOOL
+        handle = kernel.FindFirstFileW(path, ctypes.byref(data))
+        invalid = ctypes.c_void_p(-1).value
+        if handle and handle != invalid:
+            kernel.FindClose(handle)
+            return _attrs_are_cloud(int(data.dwFileAttributes), int(data.dwReserved0))
+        get_attrs = kernel.GetFileAttributesW
         get_attrs.argtypes = [wintypes.LPCWSTR]
         get_attrs.restype = wintypes.DWORD
-        attrs = get_attrs(path)
-    except (AttributeError, OSError):
+        return _attrs_are_cloud(int(get_attrs(path)))
+    except (AttributeError, OSError, ValueError):
         return False
-    if attrs in (0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF):
-        return False
-    pinned = 0x80000
-    offline = 0x1000
-    recall_on_open = 0x40000
-    recall_on_data = 0x400000
-    if attrs & pinned:
-        return False
-    return bool(attrs & (offline | recall_on_open | recall_on_data))
+
+
+def _ffmpeg_input_names(path: str) -> list:
+    """Spellings of ``path`` that ffmpeg on Windows will actually open.
+
+    A native ``\\\\server\\share`` path is often rejected by the ffmpeg build
+    on this server. ``//server/share`` is the form that build opens. The
+    backslash form is only needed when the first spelling is rejected outright.
+    """
+    if not path:
+        return []
+    if path.startswith("\\\\"):
+        forward = "//" + path[2:].replace("\\", "/")
+        if forward == path:
+            return [path]
+        return [forward, path]
+    return [path]
 
 
 def _input_unreadable(err: str) -> bool:
@@ -119,10 +175,10 @@ def _input_unreadable(err: str) -> bool:
     return any(needle in text for needle in needles)
 
 
-# Prefix on failure markers. Older markers (v2 timed out while opening the
-# OneDrive placeholder, and the build that skipped those files entirely) are
-# ignored so a deploy retries the clip from the archive share immediately.
-_FAIL_VERSION = "v3"
+# Prefix on failure markers. Older markers are ignored so a deploy retries
+# immediately: v2 timed out on the OneDrive placeholder, and v3 tried the
+# share with a path spelling ffmpeg on this server does not open.
+_FAIL_VERSION = "v4"
 
 
 @dataclass
@@ -167,6 +223,9 @@ class MediaEngine:
         self.thumbs_dir.mkdir(parents=True, exist_ok=True)
         self.previews_dir.mkdir(parents=True, exist_ok=True)
         self._last_error = ""
+        self._poster_ok = 0
+        self._poster_fail = 0
+        self._poster_last_error = ""
 
     @property
     def has_ffmpeg(self) -> bool:
@@ -453,6 +512,57 @@ class MediaEngine:
         cmd += ["-an", "-sn", "-dn", "-frames:v", "1", "-vf", vf, "-q:v", "5", str(tmp)]
         return cmd
 
+    def _note_poster(self, ok: bool, detail: str = "") -> None:
+        with self._q_lock:
+            if ok:
+                self._poster_ok += 1
+                self._poster_last_error = ""
+            else:
+                self._poster_fail += 1
+                if detail:
+                    self._poster_last_error = detail.replace("\n", " ")[:240]
+
+    def poster_status(self) -> dict:
+        """How many posters are saved, plus the latest ffmpeg error."""
+        cached = 0
+        try:
+            cached = sum(1 for path in self.thumbs_dir.glob("*.jpg") if path.stat().st_size > 0)
+        except OSError:
+            cached = 0
+        with self._q_lock:
+            return {
+                "cached": cached,
+                "queued": len(self._thumb_q) + self._thumb_inflight,
+                "made": self._poster_ok,
+                "failed": self._poster_fail,
+                "last_error": self._poster_last_error,
+            }
+
+    def _try_frame(self, source: str, tmp: Path, attempts) -> str:
+        """Return ``ok``, ``timeout``, ``unreadable``, or ``error``."""
+        status = "error"
+        for ss, vf, mapped, timeout in attempts:
+            self._cleanup(tmp)
+            cmd = self._frame_command(source, tmp, ss, vf, mapped)
+            status = self._run(cmd, timeout=timeout)
+            if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
+                return "ok"
+            if status == "timeout":
+                return "timeout"
+            if _input_unreadable(self._last_error):
+                return "unreadable"
+            # Newer ffmpeg refuses a single JPEG unless -update 1 is set.
+            if "update" in (self._last_error or "").lower():
+                self._cleanup(tmp)
+                status = self._run(cmd[:-1] + ["-update", "1", cmd[-1]], timeout=timeout)
+                if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
+                    return "ok"
+                if status == "timeout":
+                    return "timeout"
+                if _input_unreadable(self._last_error):
+                    return "unreadable"
+        return "error"
+
     def _generate_thumbnail(self, src: str, key: str) -> bool:
         """Create ``thumbs/<key>.jpg``. Remembers a failure instead of retrying forever."""
         out = self._thumb_file(key)
@@ -463,15 +573,16 @@ class MediaEngine:
         sources = self._sources_for(src)
         if not sources:
             self._mark_failure(self.thumbs_dir, key, "missing")
+            self._note_poster(False, "missing")
             return False
         tmp = self.thumbs_dir / f"{key}.partial.jpg"
         w = self.thumb_max_width
         # First command lets a current ffmpeg convert 8-bit and a lot of
         # 10-bit footage. zscale is the fallback when swscale cannot convert
         # ProRes / HEVC 10-bit or 4:2:2. The last command drops -map for
-        # clips whose first stream is not video. A timeout or a file that
-        # cannot be opened moves on to the next copy (the share, then the
-        # OneDrive path) instead of repeating the same read.
+        # clips whose first stream is not video. A timeout moves on to the
+        # next copy of the file. A path ffmpeg cannot open tries the other
+        # spelling of that share, then the OneDrive path.
         attempts = [
             ("1", f"scale='min({w},iw)':-2,format=yuv420p", True, 45),
             ("1", f"zscale={w}:-2,format=yuv420p", True, 30),
@@ -482,29 +593,15 @@ class MediaEngine:
                 return True
             status = "error"
             for source in sources:
-                for ss, vf, mapped, timeout in attempts:
-                    self._cleanup(tmp)
-                    cmd = self._frame_command(source, tmp, ss, vf, mapped)
-                    status = self._run(cmd, timeout=timeout)
-                    if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
+                for name in _ffmpeg_input_names(source):
+                    status = self._try_frame(name, tmp, attempts)
+                    if status == "ok":
                         tmp.replace(out)
                         self._clear_failure(self.thumbs_dir, key)
+                        self._note_poster(True)
                         return True
-                    if status == "timeout" or _input_unreadable(self._last_error):
-                        status = "timeout" if status == "timeout" else "unreadable"
+                    if status != "unreadable":
                         break
-                    # Newer ffmpeg refuses a single JPEG unless -update 1 is set.
-                    if "update" in (self._last_error or "").lower():
-                        self._cleanup(tmp)
-                        # -update has to precede the output path.
-                        status = self._run(cmd[:-1] + ["-update", "1", cmd[-1]], timeout=timeout)
-                        if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
-                            tmp.replace(out)
-                            self._clear_failure(self.thumbs_dir, key)
-                            return True
-                        if status == "timeout" or _input_unreadable(self._last_error):
-                            status = "timeout" if status == "timeout" else "unreadable"
-                            break
             self._cleanup(tmp)
             if status == "timeout":
                 reason = "timeout"
@@ -513,8 +610,40 @@ class MediaEngine:
             else:
                 reason = "ffmpeg-failed"
             detail = (self._last_error or "").replace("\n", " ")
-            self._mark_failure(self.thumbs_dir, key, f"{reason} {detail}".strip())
+            message = f"{reason} {detail}".strip()
+            self._mark_failure(self.thumbs_dir, key, message)
+            self._note_poster(False, message)
             return False
+
+    def probe_source(self, path: str, timeout: float = 40) -> dict:
+        """Grab one frame from ``path`` and report ffmpeg's answer.
+
+        Used by ``/doctor``. Does not write the gallery cache. A UNC path is
+        not stat'd first; ffmpeg's own timeout is the limit.
+        """
+        if not self.ffmpeg or not path:
+            return {"ok": False, "input": path, "status": "error", "error": "ffmpeg missing"}
+        tmp = self.cache_dir / "doctor_share.jpg"
+        w = self.thumb_max_width
+        attempts = [("1", f"scale='min({w},iw)':-2,format=yuv420p", True, timeout)]
+        status = "error"
+        used = path
+        try:
+            for name in _ffmpeg_input_names(path):
+                used = name
+                status = self._try_frame(name, tmp, attempts)
+                if status == "ok":
+                    return {"ok": True, "input": name, "status": status, "error": ""}
+                if status != "unreadable":
+                    break
+            return {
+                "ok": False,
+                "input": used,
+                "status": status,
+                "error": (self._last_error or status)[:500],
+            }
+        finally:
+            self._cleanup(tmp)
 
     def thumbnail_path(self, src: str, mtime_ns: Optional[int]) -> Optional[Path]:
         """Return a cached JPG thumbnail, generating it on this thread if needed.
@@ -575,23 +704,26 @@ class MediaEngine:
             ok = False
             with self._gen_sem:
                 for source in sources:
-                    for vf in filters:
-                        self._cleanup(tmp)
-                        status = self._run(
-                            [self.ffmpeg, "-y", "-nostdin", "-i", source,
-                             "-t", str(self.preview_max_seconds),
-                             "-vf", vf,
-                             "-c:v", "libx264", "-crf", "28", "-preset", "veryfast",
-                             # 8-bit 4:2:0 so 10-bit/422 sources still encode AND play in browsers
-                             "-pix_fmt", "yuv420p",
-                             "-c:a", "aac", "-b:a", "96k",
-                             "-movflags", "+faststart", str(tmp)],
-                            timeout=600,
-                        )
-                        if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
-                            ok = True
-                            break
-                        if status == "timeout" or _input_unreadable(self._last_error):
+                    for name in _ffmpeg_input_names(source):
+                        for vf in filters:
+                            self._cleanup(tmp)
+                            status = self._run(
+                                [self.ffmpeg, "-y", "-nostdin", "-i", name,
+                                 "-t", str(self.preview_max_seconds),
+                                 "-vf", vf,
+                                 "-c:v", "libx264", "-crf", "28", "-preset", "veryfast",
+                                 # 8-bit 4:2:0 so 10-bit/422 sources still encode AND play in browsers
+                                 "-pix_fmt", "yuv420p",
+                                 "-c:a", "aac", "-b:a", "96k",
+                                 "-movflags", "+faststart", str(tmp)],
+                                timeout=600,
+                            )
+                            if status == "ok" and tmp.exists() and tmp.stat().st_size > 0:
+                                ok = True
+                                break
+                            if status == "timeout" or _input_unreadable(self._last_error):
+                                break
+                        if ok or status == "timeout" or not _input_unreadable(self._last_error):
                             break
                     if ok:
                         break

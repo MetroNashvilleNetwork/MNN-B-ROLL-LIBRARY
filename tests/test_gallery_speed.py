@@ -138,6 +138,11 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertIn("zzzzunique-clip.mp4", recent_names)
         self.assertEqual(body["filters"]["total"], 82)
         self.assertEqual(body["build"], BUILD_MARKER)
+        self.assertIn("cached", body["posters"])
+        posters = self.client.get("/api/posters")
+        self.assertEqual(posters.status_code, 200)
+        self.assertIn("no-store", posters.headers["Cache-Control"])
+        self.assertEqual(posters.get_json()["build"], BUILD_MARKER)
         more = next(s for s in body["sections"] if s["key"] == "_more")
         self.assertEqual(more["items"][0]["filename"], "zzzzunique-clip.mp4")
 
@@ -296,7 +301,7 @@ class GallerySpeedTests(unittest.TestCase):
         src.write_bytes(b"video")
         key = eng._key(str(src), 9)
         (eng.thumbs_dir / f"{key}.fail").write_text(
-            f"v2\n{time.time():.0f}\ntimeout\n", encoding="utf-8")
+            f"v3\n{time.time():.0f}\ntimeout\n", encoding="utf-8")
         self.assertEqual(eng.thumb_state(str(src), 9), "pending")
         eng.enqueue_thumbnail(str(src), 9, front=True)
         self.assertEqual(eng.thumb_queue_depth(), 1)
@@ -322,7 +327,7 @@ class GallerySpeedTests(unittest.TestCase):
             os.path.exists = orig
         self.assertTrue(made)
         self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, [share, str(local)])
+        self.assertEqual(eng.tried, ["//smb.data.nashville.org/MNNArchive/clip.mp4", str(local)])
 
     def test_unreadable_share_does_not_retry_filters(self):
         eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-unreadable")
@@ -331,8 +336,8 @@ class GallerySpeedTests(unittest.TestCase):
         share = r"\\server\share\clip.mp4"
         eng.source_resolver = lambda src: [share, str(local)]
         self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
-        self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, [share, str(local)])
+        self.assertEqual(eng.runs, 3)
+        self.assertEqual(eng.tried, ["//server/share/clip.mp4", share, str(local)])
 
     def test_codec_error_tries_zscale_before_another_copy(self):
         eng = _ZscaleEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-zscale")
@@ -361,7 +366,22 @@ class GallerySpeedTests(unittest.TestCase):
         eng.source_resolver = poster_sources
         out = eng.preview_path(indexed, 1)
         self.assertIsNotNone(out)
-        self.assertEqual(eng.tried, [NETWORK_FOOTAGE_ROOT + r"\Aaron\July\clip.mp4"])
+        self.assertEqual(
+            eng.tried,
+            ["//smb.data.nashville.org/MNNArchive/2026 Metro Nashville Archive B-Roll Footage/Aaron/July/clip.mp4"],
+        )
+
+    def test_pinned_placeholder_is_still_cloud_and_share_uses_forward_slashes(self):
+        from broll_search.web.media import _attrs_are_cloud, _ffmpeg_input_names
+        self.assertTrue(_attrs_are_cloud(0x80000 | 0x400000))
+        self.assertTrue(_attrs_are_cloud(0x400, 0x9000101A))
+        self.assertFalse(_attrs_are_cloud(0x20))
+        share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
+        self.assertEqual(_ffmpeg_input_names(share), [
+            "//smb.data.nashville.org/MNNArchive/clip.mp4",
+            share,
+        ])
+        self.assertEqual(_ffmpeg_input_names(r"C:\footage\clip.mp4"), [r"C:\footage\clip.mp4"])
 
 
 class _TimeoutThenOk(MediaEngine):
@@ -374,7 +394,7 @@ class _TimeoutThenOk(MediaEngine):
         self.runs += 1
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if src.startswith("\\\\"):
+        if src.startswith("\\\\") or src.startswith("//"):
             self._last_error = "timeout"
             return "timeout"
         Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
@@ -391,8 +411,8 @@ class _UnreadableThenOk(MediaEngine):
         self.runs += 1
         src = cmd[cmd.index("-i") + 1]
         self.tried.append(src)
-        if src.startswith("\\\\"):
-            self._last_error = "\\\\server\\share\\clip.mp4: No such file or directory"
+        if src.startswith("\\\\") or src.startswith("//"):
+            self._last_error = "//server/share/clip.mp4: No such file or directory"
             return "error"
         Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
         return "ok"

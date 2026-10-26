@@ -262,9 +262,51 @@ function renderHome(sections){
   rowsEl.querySelectorAll(".row-section").forEach((s)=>ro.observe(s));
   refreshCollUI();
 }
+function posterNote(posters){
+  if(!posters) return "";
+  const err = posters.last_error ? String(posters.last_error) : "";
+  if(err && !posters.made) return `Posters aren't being saved yet. ${err}`;
+  if(posters.total && posters.cached < posters.total){
+    return `Loading posters from the archive — ${posters.cached} of ${posters.total} ready.`;
+  }
+  if(posters.cached === 1) return "1 poster ready.";
+  if(posters.cached) return `${posters.cached} posters ready.`;
+  return "";
+}
+function paintPosterNote(posters){
+  const stat = el("heroStat");
+  if(!stat) return;
+  let note = stat.querySelector(".hero-note");
+  const text = posterNote(posters);
+  if(!text){ if(note) note.remove(); return; }
+  if(!note){
+    note = document.createElement("span");
+    note.className = "hero-note";
+    stat.appendChild(note);
+  }
+  note.textContent = text;
+}
+function watchPosterNote(){
+  let ticks = 0;
+  const tick = async () => {
+    ticks += 1;
+    try{
+      const posters = await fetch("/api/posters").then((r)=>r.json());
+      paintPosterNote(posters);
+      if(posters.total && posters.cached >= posters.total) return;
+    }catch(e){}
+    if(ticks < 24) setTimeout(tick, 5000);
+  };
+  setTimeout(tick, 2000);
+}
 async function loadHome(){
   const data = await fetch("/api/home").then((r)=>r.json());
   if(data.filters) applyFilterData(data.filters);
+  if(data.posters){
+    data.posters.total = (data.filters && data.filters.total) || 0;
+    paintPosterNote(data.posters);
+    watchPosterNote();
+  }
   renderHome(data.sections || []);
 }
 

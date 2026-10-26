@@ -27,7 +27,7 @@ from .media import MediaEngine, _hidden_kwargs, is_cloud_placeholder
 # Bump this string on every push that touches the server so we can confirm, from
 # the browser, that the server actually pulled the latest code. If /doctor shows
 # an old marker, the GitHub sync is behind and no code fix will take effect.
-BUILD_MARKER = "2026-10-23 posters-from-archive-share"
+BUILD_MARKER = "2026-10-26 share-path-ffmpeg"
 
 
 def _run_capture(cmd: list, timeout: float) -> dict:
@@ -199,8 +199,19 @@ def build_report(config, media: MediaEngine, con) -> dict:
         except OSError:
             return None
 
+    share = None
+    for sample in samples:
+        for candidate in sample.get("poster_sources") or []:
+            if isinstance(candidate, str) and (candidate.startswith("\\\\") or candidate.startswith("//")):
+                share = candidate
+                break
+        if share:
+            break
+    share_probe = media.probe_source(share) if share and media.ffmpeg else None
+
     return {
         "build_marker": BUILD_MARKER,
+        "share_probe": share_probe,
         "git": _git_head(repo_dir),
         "ffmpeg": _tool_report("ffmpeg", media.ffmpeg),
         "ffprobe": _tool_report("ffprobe", media.ffprobe),
@@ -246,6 +257,16 @@ def render_html(report: dict) -> str:
         if ff.get("has_libx264") is False:
             verdicts.append(("bad", "This ffmpeg has no libx264 encoder — previews can't "
                                     "be made. Replace with a full ffmpeg build."))
+
+    probe = report.get("share_probe")
+    if probe and probe.get("ok"):
+        verdicts.append(("ok", "The archive share produced a poster "
+                               f"({esc(probe.get('input') or '')}, ffmpeg opened it)."))
+    elif probe:
+        verdicts.append(("bad", "The archive share did not produce a poster "
+                                f"({esc(probe.get('status') or '')}). ffmpeg said: "
+                                f"{esc(probe.get('error') or '')}. Input tried: "
+                                f"{esc(probe.get('input') or '')}."))
 
     for s in report.get("samples", []):
         tag = "DJI/drone" if (s["filename"].upper().startswith("DJI") or "drone" in s["path"].lower()) else "other"
