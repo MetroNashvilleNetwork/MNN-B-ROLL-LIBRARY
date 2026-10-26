@@ -270,7 +270,12 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertEqual(_network_path(mapped), expected)
         self.assertEqual(_network_path(forwarded), expected)
         self.assertEqual(_network_path(expected), expected)
-        self.assertEqual(poster_sources(onedrive), [expected, onedrive])
+        alt = (
+            r"\\smb.data.nashville.org\MNNArchive"
+            r"\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
+            + tail
+        )
+        self.assertEqual(poster_sources(onedrive), [expected, alt, onedrive])
         self.assertEqual(poster_sources(""), [])
 
     def test_unc_share_is_not_statd(self):
@@ -293,7 +298,9 @@ class GallerySpeedTests(unittest.TestCase):
         folder.mkdir(parents=True)
         clip = folder / "clip.mp4"
         clip.write_bytes(b"video")
-        self.assertEqual(poster_sources(str(clip)), [str(clip)])
+        sources = poster_sources(str(clip))
+        self.assertEqual(sources[-1], str(clip))
+        self.assertTrue(sources[0].startswith("\\\\smb.data.nashville.org\\"))
 
     def test_v2_timeout_marker_is_retried_from_the_share(self):
         eng = MediaEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-v2")
@@ -301,7 +308,7 @@ class GallerySpeedTests(unittest.TestCase):
         src.write_bytes(b"video")
         key = eng._key(str(src), 9)
         (eng.thumbs_dir / f"{key}.fail").write_text(
-            f"v3\n{time.time():.0f}\ntimeout\n", encoding="utf-8")
+            f"v4\n{time.time():.0f}\ntimeout\n", encoding="utf-8")
         self.assertEqual(eng.thumb_state(str(src), 9), "pending")
         eng.enqueue_thumbnail(str(src), 9, front=True)
         self.assertEqual(eng.thumb_queue_depth(), 1)
@@ -327,7 +334,7 @@ class GallerySpeedTests(unittest.TestCase):
             os.path.exists = orig
         self.assertTrue(made)
         self.assertEqual(eng.runs, 2)
-        self.assertEqual(eng.tried, ["//smb.data.nashville.org/MNNArchive/clip.mp4", str(local)])
+        self.assertEqual(eng.tried, [share, str(local)])
 
     def test_unreadable_share_does_not_retry_filters(self):
         eng = _UnreadableThenOk(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-unreadable")
@@ -336,8 +343,8 @@ class GallerySpeedTests(unittest.TestCase):
         share = r"\\server\share\clip.mp4"
         eng.source_resolver = lambda src: [share, str(local)]
         self.assertTrue(eng._generate_thumbnail(str(local), eng._key(str(local), 4)))
-        self.assertEqual(eng.runs, 3)
-        self.assertEqual(eng.tried, ["//server/share/clip.mp4", share, str(local)])
+        self.assertEqual(eng.runs, 2)
+        self.assertEqual(eng.tried, [share, str(local)])
 
     def test_codec_error_tries_zscale_before_another_copy(self):
         eng = _ZscaleEngine(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-zscale")
@@ -366,10 +373,7 @@ class GallerySpeedTests(unittest.TestCase):
         eng.source_resolver = poster_sources
         out = eng.preview_path(indexed, 1)
         self.assertIsNotNone(out)
-        self.assertEqual(
-            eng.tried,
-            ["//smb.data.nashville.org/MNNArchive/2026 Metro Nashville Archive B-Roll Footage/Aaron/July/clip.mp4"],
-        )
+        self.assertEqual(eng.tried, [NETWORK_FOOTAGE_ROOT + r"\Aaron\July\clip.mp4"])
 
     def test_pinned_placeholder_is_still_cloud_and_share_uses_forward_slashes(self):
         from broll_search.web.media import _attrs_are_cloud, _ffmpeg_input_names
@@ -378,10 +382,35 @@ class GallerySpeedTests(unittest.TestCase):
         self.assertFalse(_attrs_are_cloud(0x20))
         share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
         self.assertEqual(_ffmpeg_input_names(share), [
-            "//smb.data.nashville.org/MNNArchive/clip.mp4",
             share,
+            "\\\\?\\UNC\\smb.data.nashville.org\\MNNArchive\\clip.mp4",
         ])
-        self.assertEqual(_ffmpeg_input_names(r"C:\footage\clip.mp4"), [r"C:\footage\clip.mp4"])
+        self.assertEqual(_ffmpeg_input_names(r"C:\footage\clip.mp4"), [
+            r"C:\footage\clip.mp4",
+            "\\\\?\\" + r"C:\footage\clip.mp4",
+        ])
+
+    def test_invalid_share_spelling_tries_the_extended_path(self):
+        eng = _InvalidThenExtended(ffmpeg_path=str(self.ffmpeg), cache_dir=self.root / "cache-ext")
+        share = r"\\smb.data.nashville.org\MNNArchive\clip.mp4"
+        eng.source_resolver = lambda src: [share]
+        self.assertTrue(eng._generate_thumbnail(share, eng._key(share, 1)))
+        self.assertEqual(eng.tried, [share, "\\\\?\\UNC\\smb.data.nashville.org\\MNNArchive\\clip.mp4"])
+
+
+class _InvalidThenExtended(MediaEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tried = []
+
+    def _run(self, cmd, timeout):
+        src = cmd[cmd.index("-i") + 1]
+        self.tried.append(src)
+        if src.startswith("\\\\?\\UNC\\"):
+            Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+            return "ok"
+        self._last_error = "Error opening input: Invalid argument"
+        return "error"
 
 
 class _TimeoutThenOk(MediaEngine):

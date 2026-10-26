@@ -142,20 +142,46 @@ def is_cloud_placeholder(path: str) -> bool:
 
 
 def _ffmpeg_input_names(path: str) -> list:
-    """Spellings of ``path`` that ffmpeg on Windows will actually open.
+    """Spellings of ``path`` ffmpeg should try, in order.
 
-    A native ``\\\\server\\share`` path is often rejected by the ffmpeg build
-    on this server. ``//server/share`` is the form that build opens. The
-    backslash form is only needed when the first spelling is rejected outright.
+    The native ``\\\\server\\share`` form is first. ``//server/share`` is not
+    used: on this server it makes ffmpeg return "Invalid argument" and the
+    real share path never gets a turn. ``\\\\?\\UNC\\...`` is the long-path
+    form, tried only when the native path is rejected the same way.
     """
-    if not path:
-        return []
+    if not path or path.startswith("\\\\?\\"):
+        return [path] if path else []
     if path.startswith("\\\\"):
-        forward = "//" + path[2:].replace("\\", "/")
-        if forward == path:
-            return [path]
-        return [forward, path]
+        return [path, "\\\\?\\UNC\\" + path[2:]]
+    if len(path) > 3 and path[1] == ":":
+        return [path, "\\\\?\\" + path]
     return [path]
+
+
+def _rejected_spelling(err: str) -> bool:
+    """True when ffmpeg refused the path text, so another spelling might work."""
+    text = (err or "").lower()
+    return "invalid argument" in text and "opening input" in text
+
+
+def _short_open_error(name: str, err: str) -> str:
+    """One short clause for the gallery status line."""
+    text = (err or "").replace("\n", " ").strip().lower()
+    if name.startswith("\\\\") or name.startswith("//"):
+        where = "share"
+    else:
+        where = "local file"
+    if "invalid argument" in text:
+        why = "invalid argument"
+    elif "access is denied" in text or "permission denied" in text:
+        why = "access denied"
+    elif any(bit in text for bit in ("no such file", "cannot find", "not found", "network path")):
+        why = "not found"
+    elif text == "timeout" or "timed out" in text:
+        why = "timed out"
+    else:
+        why = (err or "failed").replace("\n", " ").strip()[:80]
+    return f"{where}: {why}"
 
 
 def _input_unreadable(err: str) -> bool:
@@ -176,9 +202,9 @@ def _input_unreadable(err: str) -> bool:
 
 
 # Prefix on failure markers. Older markers are ignored so a deploy retries
-# immediately: v2 timed out on the OneDrive placeholder, and v3 tried the
-# share with a path spelling ffmpeg on this server does not open.
-_FAIL_VERSION = "v4"
+# immediately. v4 still opened the OneDrive placeholder (Invalid argument)
+# and could skip the share entirely.
+_FAIL_VERSION = "v5"
 
 
 @dataclass
@@ -520,7 +546,7 @@ class MediaEngine:
             else:
                 self._poster_fail += 1
                 if detail:
-                    self._poster_last_error = detail.replace("\n", " ")[:240]
+                    self._poster_last_error = detail.replace("\n", " ")[:300]
 
     def poster_status(self) -> dict:
         """How many posters are saved, plus the latest ffmpeg error."""
@@ -592,7 +618,12 @@ class MediaEngine:
             if out.exists() and out.stat().st_size > 0:
                 return True
             status = "error"
+            notes = []
+            share_timed_out = False
             for source in sources:
+                is_share = source.startswith("\\\\") or source.startswith("//")
+                if share_timed_out and is_share:
+                    continue
                 for name in _ffmpeg_input_names(source):
                     status = self._try_frame(name, tmp, attempts)
                     if status == "ok":
@@ -600,8 +631,20 @@ class MediaEngine:
                         self._clear_failure(self.thumbs_dir, key)
                         self._note_poster(True)
                         return True
-                    if status != "unreadable":
+                    notes.append(_short_open_error(name, self._last_error or status))
+                    if status == "timeout":
+                        if is_share:
+                            share_timed_out = True
                         break
+                    # "Invalid argument" on open is how this ffmpeg rejects a
+                    # path spelling and how it rejects an OneDrive placeholder.
+                    # Another spelling of the same path is cheap. A missing
+                    # share is not — move on to the next copy of the file.
+                    if _rejected_spelling(self._last_error):
+                        continue
+                    break
+                if status == "timeout" and not is_share:
+                    break
             self._cleanup(tmp)
             if status == "timeout":
                 reason = "timeout"
@@ -609,7 +652,7 @@ class MediaEngine:
                 reason = "unreadable"
             else:
                 reason = "ffmpeg-failed"
-            detail = (self._last_error or "").replace("\n", " ")
+            detail = "; ".join(dict.fromkeys(notes))
             message = f"{reason} {detail}".strip()
             self._mark_failure(self.thumbs_dir, key, message)
             self._note_poster(False, message)

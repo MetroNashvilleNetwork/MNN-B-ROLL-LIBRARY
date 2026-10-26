@@ -103,22 +103,44 @@ def _file_is_local(path: str) -> bool:
     return not is_cloud_placeholder(path)
 
 
+# The OneDrive sync folder keeps an "MNNPublic - " prefix. The share usually
+# does not, but try that folder name too when the indexed path has it.
+_ALT_NETWORK_ROOT = r"\\smb.data.nashville.org\MNNArchive\MNNPublic - 2026 Metro Nashville Archive B-Roll Footage"
+
+
+def _network_candidates(path: str) -> list:
+    """Share paths worth opening, best first. Does not include ``path`` itself."""
+    tail = _archive_tail(path)
+    if tail is None:
+        return []
+    out = []
+    primary = _network_path(path)
+    if primary and primary != path:
+        out.append(primary)
+    if "mnnpublic - " in _norm_win(path).lower():
+        alt = _ALT_NETWORK_ROOT.rstrip("\\")
+        if tail:
+            alt = alt + "\\" + tail
+        if alt not in out and alt != path:
+            out.append(alt)
+    return out
+
+
 def poster_sources(path: str) -> list:
     """Where to read a poster from, best first.
 
-    A hydrated local file is used as-is. Anything else tries the archive
-    share before the indexed path, so ffmpeg can grab one frame from the
-    share instead of waiting for OneDrive to download the whole clip.
+    The archive share always comes before the indexed OneDrive path. Windows
+    reports a lot of placeholders as ordinary files, and opening those makes
+    ffmpeg return "Invalid argument" instead of a frame.
     """
     if not path:
         return []
-    network = _network_path(path)
-    if _file_is_local(path):
-        return [path]
     ordered = []
-    if network and network != path:
-        ordered.append(network)
-    ordered.append(path)
+    for candidate in _network_candidates(path):
+        if candidate not in ordered:
+            ordered.append(candidate)
+    if path not in ordered:
+        ordered.append(path)
     return ordered
 
 
